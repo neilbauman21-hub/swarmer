@@ -167,7 +167,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   max-height: calc(100vh - 32px); overflow: auto;
 }
 .menu-card h1 {
-  margin: 0; font-size: 56px; font-weight: 800; letter-spacing: 0.12em;
+  margin: 0; font-family: 'Chakra Petch', Inter, system-ui, sans-serif; font-size: 56px; font-weight: 700; letter-spacing: 0.14em;
   background: linear-gradient(120deg, #5ad8ff, #b98cff 60%, #ff7b6b); -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 0 24px rgba(90, 216, 255, 0.35));
 }
@@ -210,3 +210,11 @@ summary { cursor: pointer; font-weight: 700; }
   .tutorial { bottom: 200px; }
 }
 .menu-demo { position: fixed; inset: 0; }
+
+.desktop-note { display: none; margin-top: 12px; font-size: 12px; color: var(--warn); }
+@media (max-width: 760px), (pointer: coarse) {
+  .desktop-note { display: block; }
+  .menu-card h1 { font-size: 40px; }
+  .menu-card { padding: 24px 18px; }
+  .opt { flex-wrap: wrap; gap: 8px; }
+}

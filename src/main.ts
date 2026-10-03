@@ -94,6 +94,7 @@ function menu(): void {
       <div class="opt"><label>Rival swarms</label><div class="seg" data-choice="rivals"></div></div>
       <div class="opt"><label>Map</label><div class="seg" data-choice="size"></div></div>
       <button class="play">Play</button>
+      <p class="desktop-note">Swarmer is built for a mouse and keyboard. Open it on a desktop for the full game.</p>
       <details><summary>Controls</summary>${CONTROLS}</details>
     </div>`);
   choice(el, 'diff', [0, 1, 2], DIFFICULTY.map((d) => d.name), opts.difficulty, (v) => (opts.difficulty = v));
