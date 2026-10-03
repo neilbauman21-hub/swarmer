@@ -53,6 +53,7 @@ const TUTORIAL: { key: string; text: string }[] = [
   { key: 'select', text: '<b>Drag a box</b> or <b>click</b> your cyan swarm to select it.' },
   { key: 'harvest', text: '<b>Right-click an asteroid</b> to harvest it. Its mass turns into new units.' },
   { key: 'split', text: 'Press <kbd>S</kbd> to <b>split</b> toward the cursor, then send the new half to another rock.' },
+  { key: 'path', text: '<b>Hold right mouse and drag</b> to draw a route. <kbd>Shift</kbd>+right-click queues waypoints.' },
   { key: 'replicate', text: 'Press <kbd>B</kbd> to <b>replicate</b> (needs 20+ units). The group stays put and multiplies.' },
   { key: 'research', text: 'Press <kbd>T</kbd> to <b>research</b> with a group. Spend points with <kbd>Y</kbd>.' },
   { key: 'formation', text: '<b>Formations</b>: <kbd>Z</kbd> Swarm · <kbd>X</kbd> Wedge · <kbd>C</kbd> Ring · <kbd>V</kbd> Line.' },

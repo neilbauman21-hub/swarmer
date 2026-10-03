@@ -95,10 +95,19 @@ void main(){
   vec2 p=v_uv*v_dim; // local units
   float w=v_dim.y;
   vec4 c=v_color;
-  if(v_shape==0){ // glowing streak (units, sparks)
+  if(v_shape==0){ // glowing streak (units, sparks); param.x = role glyph
     float d=sdSeg(p,v_dim.x-w)/w;
     float core=smoothstep(0.42,0.18,d);
     float glow=exp(-d*d*5.0)*0.55;
+    int glyph=int(v_param.x+0.5);
+    if(glyph==2){ // tank: armored ring around a small core
+      core=smoothstep(0.14,0.0,abs(d-0.42))+smoothstep(0.2,0.05,d)*0.8;
+    } else if(glyph==4){ // artillery: diamond
+      float dd=(abs(p.x)+abs(p.y))/w;
+      core=smoothstep(0.62,0.4,dd);
+    } else if(glyph==3){ // harvester: soft orb
+      core=smoothstep(0.5,0.0,d)*0.7;
+    }
     float a=core+glow;
     o=vec4(c.rgb*a*c.a + vec3(core*0.35*c.a),0.0);
     return;

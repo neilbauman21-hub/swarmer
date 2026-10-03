@@ -110,7 +110,7 @@ export function buildScene(w: World, fx: Fx, view: Bounds, s: SceneState, under:
     let [r, gg, b] = teamColor(uteam[i]);
     let size = 2.6 * role.size;
     let streak = 0.045;
-    if (g.role === Role.Striker) streak = 0.075;
+    if (g.role === Role.Striker) { streak = 0.1; size *= 0.75; }
     else if (g.role === Role.Artillery) { r = r * 0.6 + 0.4; gg = gg * 0.6 + 0.4; b = b * 0.6 + 0.4; }
     else if (g.role === Role.Harvester) { size *= 0.9; }
     if (g.morphT > 0) {
@@ -120,7 +120,7 @@ export function buildScene(w: World, fx: Fx, view: Bounds, s: SceneState, under:
     const f = uflash[i];
     if (f > 0) { r += (1 - r) * f; gg += (1 - gg) * f; b += (1 - b) * f; }
     const wdt = Math.max(minW, size);
-    glow.push(x, y, uvx[i] * streak, uvy[i] * streak, wdt, Shape.Glow, r, gg, b, 0.85 + f * 0.5);
+    glow.push(x, y, uvx[i] * streak, uvy[i] * streak, wdt, Shape.Glow, r, gg, b, 0.85 + f * 0.5, wdt * s.zoom > 3 ? g.role : 0);
   }
 
   // ---- shells

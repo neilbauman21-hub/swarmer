@@ -1,4 +1,4 @@
-import { DASH, DT, Difficulty, FORMATIONS, Formation, NOVA, ROLES, Role, SHIELD, SHIPS, TEAM_COLORS } from './sim/config';
+import { COUNTER, DASH, DT, TEAM_NAMES, Difficulty, FORMATIONS, Formation, NOVA, ROLES, Role, SHIELD, SHIPS, TEAM_COLORS } from './sim/config';
 import { World, type GameEvent } from './sim/world';
 import { Fx } from './render/fx';
 import { Renderer, SpriteBatch } from './render/renderer';
@@ -90,6 +90,7 @@ export class Game {
 
   destroy(): void {
     this.destroyed = true;
+    this.audio.setIntensity(0);
     cancelAnimationFrame(this.raf);
     for (const c of this.cleanup) c();
     this.hud?.destroy();
@@ -133,7 +134,14 @@ export class Game {
     this.fx.handle(events, bounds);
     this.audio.tick(dt);
     if (this.opts.demo) this.directDemoCamera(dt);
-    else this.audio.play(events, (x, y) => this.audibility(x, y));
+    else {
+      this.audio.play(events, (x, y) => this.audibility(x, y));
+      this.audio.startMusic();
+      let fighting = 0;
+      for (const g of this.world.groupsOf(0)) if (g.combatT < 1.5) fighting += g.count;
+      this.musicIntensity += (Math.min(1, fighting / 120) - this.musicIntensity) * Math.min(1, dt * 0.8);
+      this.audio.setIntensity(this.paused ? 0 : this.musicIntensity);
+    }
     this.onEvents(events);
     this.pruneSelection();
     this.updateCamera(dt);
@@ -145,6 +153,17 @@ export class Game {
 
   private onEvents(events: GameEvent[]): void {
     for (const e of events) {
+      if (e.t === 'teamOut' && e.team !== 0) {
+        const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
+        this.hud?.banner(`${TEAM_NAMES[e.team!]} has been eliminated`, `rgb(${c})`);
+        this.fx.shake(0.3);
+      } else if (e.t === 'groupLost') {
+        if (e.team === 0) this.hud?.banner(`Swarm of ${e.n} lost`, '#ff6b5a');
+        else if (this.onScreen(e.x, e.y) && (e.n ?? 0) >= 40) {
+          const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
+          this.hud?.banner(`${TEAM_NAMES[e.team!]} swarm of ${e.n} destroyed`, `rgb(${c})`);
+        }
+      }
       if (e.t === 'wave') {
         const dir = this.compass(e.x, e.y);
         this.hud?.banner(`Raider fleet inbound from the ${dir} — ${e.n} ships`, '#ffb357');
@@ -169,6 +188,7 @@ export class Game {
   }
 
   /** Attract mode: drift toward the most interesting action. */
+  private musicIntensity = 0;
   private demoFocus = -1;
   private demoTimer = 0;
   private directDemoCamera(dt: number): void {
@@ -330,6 +350,45 @@ export class Game {
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
 
+    // Queued waypoints for selected groups.
+    ctx.setLineDash([2, 7]);
+    for (const id of this.selected) {
+      const g = w.groups[id];
+      if (!g?.alive || !g.path.length || g.order.type !== 'move') continue;
+      ctx.strokeStyle = '#7fe3ff';
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.moveTo(...this.worldToScreen(g.order.x, g.order.y));
+      for (let k = 0; k < g.path.length; k += 2) ctx.lineTo(...this.worldToScreen(g.path[k], g.path[k + 1]));
+      ctx.stroke();
+      const [ex, ey] = this.worldToScreen(g.path[g.path.length - 2], g.path[g.path.length - 1]);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.arc(ex, ey, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([2, 7]);
+    }
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+
+    // Route being drawn with the right mouse button.
+    if (this.drawn && this.drawn.length >= 4) {
+      ctx.strokeStyle = 'rgba(127,227,255,0.85)';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = '#5ad8ff';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.moveTo(this.drawn[0], this.drawn[1]);
+      for (let k = 2; k < this.drawn.length; k += 2) ctx.lineTo(this.drawn[k], this.drawn[k + 1]);
+      ctx.lineTo(this.mouse.x, this.mouse.y);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 1;
+    }
+
     // Group labels: selected + hovered + large on-screen enemy groups when zoomed out.
     const labelled = new Set<number>(this.selected);
     if (this.hoverGroup >= 0) labelled.add(this.hoverGroup);
@@ -347,6 +406,8 @@ export class Game {
         const state = orderLabel(g.order.type, g.harvesting);
         if (state) label += ` · ${state}`;
         if (g.morphT > 0) label = `${g.count} · morphing → ${ROLES[g.morphTo].name}`;
+      } else {
+        label += ` · ${ROLES[g.role].name}`;
       }
       const tw = ctx.measureText(label).width + 14;
       ctx.fillStyle = 'rgba(6,10,20,0.72)';
@@ -496,12 +557,29 @@ export class Game {
     return null;
   }
 
+  /** Damage advantage of the current selection against a role (>1 = we hit harder than they do). */
+  private matchup(enemy: Role): number {
+    let mine = 0, theirs = 0, n = 0;
+    for (const id of this.selectedIds()) {
+      const g = this.world.groups[id];
+      mine += COUNTER[g.role][enemy] * g.count;
+      theirs += COUNTER[enemy][g.role] * g.count;
+      n += g.count;
+    }
+    return n ? mine / theirs : 1;
+  }
+
   private cursorHint(): [string, string] | null {
     if (!this.selected.size) return null;
     if (this.hoverShip >= 0) return ['Attack', '#ff8f7a'];
     if (this.hoverGroup >= 0) {
       const g = this.world.groups[this.hoverGroup];
-      if (g && g.team !== 0) return ['Attack', '#ff8f7a'];
+      if (g && g.team !== 0) {
+        const m = this.matchup(g.role);
+        if (m > 1.25) return [`Attack · ${ROLES[g.role].name} · favored`, '#8dffa8'];
+        if (m < 0.8) return [`Attack · ${ROLES[g.role].name} · countered`, '#ff8f7a'];
+        return [`Attack · ${ROLES[g.role].name} · even`, '#ffd48f'];
+      }
       if (g && !this.selected.has(g.id)) return ['Merge', '#9fe0ff'];
       return null;
     }
@@ -521,10 +599,7 @@ export class Game {
       this.audio.unlock();
       canvas.setPointerCapture(e.pointerId);
       this.drag = { x: e.offsetX, y: e.offsetY, button: e.button, cx: this.cam.tx, cy: this.cam.ty, moved: false };
-      if (e.button === 2) {
-        this.rightClick(e.shiftKey);
-        this.drag = null;
-      }
+      if (e.button === 2) this.drawn = [e.offsetX, e.offsetY];
     });
     on(canvas, 'pointermove', (e: PointerEvent) => {
       this.mouse.x = e.offsetX;
@@ -533,6 +608,10 @@ export class Game {
       if (this.drag) {
         const d = Math.hypot(e.offsetX - this.drag.x, e.offsetY - this.drag.y);
         if (d > 5) this.drag.moved = true;
+        if (this.drag.button === 2 && this.drag.moved && this.drawn) {
+          const n = this.drawn.length;
+          if (Math.hypot(e.offsetX - this.drawn[n - 2], e.offsetY - this.drawn[n - 1]) > 16) this.drawn.push(e.offsetX, e.offsetY);
+        }
         if (this.drag.button === 1) {
           this.cam.tx = this.drag.cx - (e.offsetX - this.drag.x) / this.cam.zoom;
           this.cam.ty = this.drag.cy - (e.offsetY - this.drag.y) / this.cam.zoom;
@@ -545,6 +624,13 @@ export class Game {
       if (!this.drag) return;
       const d = this.drag;
       this.drag = null;
+      if (d.button === 2) {
+        const pts = this.drawn;
+        this.drawn = null;
+        if (d.moved && pts && pts.length >= 6) this.pathOrder(pts);
+        else this.rightClick(e.shiftKey);
+        return;
+      }
       if (d.button !== 0) return;
       if (d.moved) this.boxSelect(d.x, d.y, e.offsetX, e.offsetY, e.shiftKey);
       else this.clickSelect(e.shiftKey);
@@ -655,7 +741,6 @@ export class Game {
     if (!ids.length) return;
     const w = this.world;
     const [wx, wy] = this.screenToWorld(this.mouse.x, this.mouse.y);
-    void shift;
     if (this.hoverShip >= 0) {
       w.cmdAttackShip(ids, this.hoverShip);
       this.ping(wx, wy, '#ff7b6b');
@@ -675,6 +760,10 @@ export class Game {
       const r = w.rocks[this.hoverRock];
       this.ping(r.x, r.y, '#e8c98f');
       this.hud?.notify('harvest');
+    } else if (shift) {
+      w.cmdQueue(ids, wx, wy);
+      this.ping(wx, wy, '#7fe3ff');
+      this.hud?.notify('path');
     } else {
       w.cmdMove(ids, wx, wy);
       this.ping(wx, wy, '#7fe3ff');
@@ -684,6 +773,33 @@ export class Game {
   }
 
   private pendingMerges: { target: number; ids: number[] }[] = [];
+  private drawn: number[] | null = null; // screen-space polyline while right-dragging
+
+  private pathOrder(screenPts: number[]): void {
+    const ids = this.selectedIds();
+    if (!ids.length) return;
+    // Resample to evenly spaced world waypoints so swarms flow smoothly along the stroke.
+    const world: number[] = [];
+    for (let k = 0; k < screenPts.length; k += 2) world.push(...this.screenToWorld(screenPts[k], screenPts[k + 1]));
+    const step = 70;
+    const out: number[] = [];
+    let carry = 0;
+    for (let k = 2; k < world.length; k += 2) {
+      const x0 = world[k - 2], y0 = world[k - 1], x1 = world[k], y1 = world[k + 1];
+      const seg = Math.hypot(x1 - x0, y1 - y0);
+      let t = step - carry;
+      while (t <= seg) {
+        out.push(x0 + ((x1 - x0) * t) / seg, y0 + ((y1 - y0) * t) / seg);
+        t += step;
+      }
+      carry = (carry + seg) % step;
+    }
+    out.push(world[world.length - 2], world[world.length - 1]);
+    this.world.cmdPath(ids, out);
+    this.ping(out[out.length - 2], out[out.length - 1], '#7fe3ff');
+    this.audio.ui('order');
+    this.hud?.notify('path');
+  }
 
   private pruneSelection(): void {
     const w = this.world;

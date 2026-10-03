@@ -36,6 +36,24 @@ describe('world', () => {
     expect(w.teams[0].units).toBeGreaterThan(before);
   });
 
+  it('follows a drawn path through every waypoint', () => {
+    const w = new World({ seed: 8, rivals: 1, waves: false });
+    w.step();
+    const g = w.groupsOf(0)[0];
+    const pts = [g.cx + 400, g.cy, g.cx + 400, g.cy - 400, g.cx, g.cy - 400];
+    w.cmdPath([g.id], pts);
+    expect(g.path.length).toBe(4);
+    let visitedCorner = false;
+    for (let i = 0; i < 60 * 14; i++) {
+      w.step();
+      if (Math.hypot(g.cx - pts[2], g.cy - pts[3]) < 90) visitedCorner = true;
+    }
+    expect(visitedCorner).toBe(true);
+    expect(Math.hypot(g.cx - pts[4], g.cy - pts[5])).toBeLessThan(60);
+    w.cmdQueue([g.id], g.cx + 100, g.cy);
+    expect(g.order.type).toBe('move');
+  });
+
   it('splits and merges groups', () => {
     const w = new World({ seed: 4, rivals: 1, waves: false });
     w.step();

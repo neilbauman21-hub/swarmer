@@ -33,6 +33,70 @@ export class Audio {
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
   }
 
+  private music: { gain: GainNode; filter: BiquadFilterNode; voices: OscillatorNode[]; bass: OscillatorNode; pulse: GainNode; step: number; next: number } | null = null;
+  private intensity = 0;
+
+  /** Slow evolving pad (Am - F - C - G) that opens up and grows a pulse when fights start. */
+  startMusic(): void {
+    if (!this.ctx || this.music) return;
+    const ctx = this.ctx;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    gain.gain.setTargetAtTime(0.07, ctx.currentTime, 4);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 500;
+    filter.Q.value = 2;
+    filter.connect(gain);
+    gain.connect(this.master!);
+    const voices: OscillatorNode[] = [];
+    for (let k = 0; k < 6; k++) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.detune.value = (k % 2 ? 1 : -1) * 9;
+      const vg = ctx.createGain();
+      vg.gain.value = 0.18;
+      o.connect(vg);
+      vg.connect(filter);
+      o.start();
+      voices.push(o);
+    }
+    const bass = ctx.createOscillator();
+    bass.type = 'triangle';
+    const pulse = ctx.createGain();
+    pulse.gain.value = 0;
+    bass.connect(pulse);
+    pulse.connect(gain);
+    bass.start();
+    this.music = { gain, filter, voices, bass, pulse, step: 0, next: 0 };
+  }
+
+  setIntensity(x: number): void {
+    this.intensity = Math.max(0, Math.min(1, x));
+  }
+
+  private updateMusic(): void {
+    const m = this.music;
+    if (!m || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    m.filter.frequency.setTargetAtTime(420 + this.intensity * 2200, now, 0.8);
+    if (now >= m.next) {
+      // A minor progression, two octaves of chord tones.
+      const chords = [[57, 60, 64], [53, 57, 60], [48, 55, 60], [55, 59, 62]];
+      const chord = chords[m.step % chords.length];
+      m.step++;
+      m.next = now + (this.intensity > 0.3 ? 4 : 8);
+      m.voices.forEach((o, k) => {
+        const midi = chord[k % 3] + (k >= 3 ? 12 : 0) - 12;
+        o.frequency.setTargetAtTime(440 * 2 ** ((midi - 69) / 12), now, 0.6);
+      });
+      m.bass.frequency.setTargetAtTime(440 * 2 ** ((chord[0] - 24 - 69) / 12), now, 0.05);
+    }
+    // Throbbing bass at 4 Hz-ish while fighting.
+    const beat = (now * 4) % 1;
+    m.pulse.gain.setTargetAtTime(this.intensity * 0.9 * (beat < 0.5 ? 1 : 0.15), now, 0.02);
+  }
+
   setMuted(m: boolean): void {
     this.muted = m;
     if (this.master) this.master.gain.value = m ? 0 : this.volume;
@@ -40,6 +104,7 @@ export class Audio {
 
   /** Per-frame refill of rate limits. */
   tick(dt: number): void {
+    this.updateMusic();
     for (const [k, v] of this.budget) this.budget.set(k, Math.min(v + dt * rate(k), cap(k)));
   }
 

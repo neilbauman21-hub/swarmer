@@ -54,6 +54,8 @@ export interface Group {
   harvesting: boolean;
   born: number;
   recentLoss: number; // decaying counter of units lost, used by AI
+  path: number[]; // queued waypoints (flat x,y pairs) after the current move target
+  peak: number; // largest size this group reached
 }
 
 export interface Team {
@@ -116,7 +118,8 @@ export interface Pool { x: number; y: number; r: number; t: number; dur: number;
 
 export interface GameEvent {
   t: 'tracer' | 'death' | 'spawn' | 'explode' | 'shipDeath' | 'nova' | 'novaCharge' | 'dash' | 'shield'
-    | 'harvest' | 'research' | 'wave' | 'morph' | 'bomb' | 'melee' | 'hitShip' | 'fail' | 'shellFire';
+    | 'harvest' | 'research' | 'wave' | 'morph' | 'bomb' | 'melee' | 'hitShip' | 'fail' | 'shellFire'
+    | 'groupLost' | 'teamOut';
   x: number;
   y: number;
   x2?: number;
@@ -245,7 +248,7 @@ export class World {
       formation: Formation.Swarm, role: Role.Drone, morphTo: Role.Drone, morphT: 0,
       energy: ENERGY_MAX * 0.5, cdDash: 0, cdShield: 0, cdNova: 0, dashT: 0, dashX: 0, dashY: 0,
       shieldT: 0, novaT: 0, cruise: 0, count: 0, cx: x, cy: y, radius: 10, spread: 0, enemyNear: false, combatT: 99,
-      progress: 0, harvesting: false, born: this.time, recentLoss: 0,
+      progress: 0, harvesting: false, born: this.time, recentLoss: 0, path: [], peak: 0,
     };
     this.groups.push(g);
     return g;
@@ -330,6 +333,28 @@ export class World {
     o.ship = -1;
     o.rock = type === 'harvest' ? target : -1;
     g.harvesting = false;
+    g.path.length = 0;
+  }
+
+  /** Follow a drawn route: points are flat x,y pairs in world space. */
+  cmdPath(ids: number[], pts: number[]): void {
+    if (pts.length < 2) return;
+    for (const id of ids) {
+      const g = this.groups[id];
+      if (!g?.alive) continue;
+      this.setOrder(g, 'move', this.clampX(pts[0]), this.clampX(pts[1]));
+      for (let k = 2; k < pts.length; k++) g.path.push(this.clampX(pts[k]));
+    }
+  }
+
+  /** Append a waypoint after whatever the group is currently moving to. */
+  cmdQueue(ids: number[], x: number, y: number): void {
+    for (const id of ids) {
+      const g = this.groups[id];
+      if (!g?.alive) continue;
+      if (g.order.type === 'move') g.path.push(this.clampX(x), this.clampX(y));
+      else this.setOrder(g, 'move', this.clampX(x), this.clampX(y));
+    }
   }
 
   cmdMove(ids: number[], x: number, y: number): void {
@@ -616,6 +641,7 @@ export class World {
       if (!g.alive) continue;
       const measured = Math.sqrt(g.spread / g.count) * 1.35 + 6;
       g.radius = Math.min(measured, formationRadius(g.count, g.formation) * 1.6);
+      if (g.count > g.peak) g.peak = g.count;
     }
   }
 
@@ -672,7 +698,11 @@ export class World {
     switch (o.type) {
       case 'move':
         gx = o.x; gy = o.y;
-        if (Math.hypot(g.ax - o.x, g.ay - o.y) < 4) o.type = 'idle';
+        if (g.path.length && Math.hypot(g.ax - o.x, g.ay - o.y) < 30 + g.radius * 0.3) {
+          // Flow through waypoints without stopping.
+          o.x = g.path.shift()!;
+          o.y = g.path.shift()!;
+        } else if (Math.hypot(g.ax - o.x, g.ay - o.y) < 4) o.type = 'idle';
         break;
       case 'attack': {
         let tx = 0, ty = 0, tr = 0, valid = false;
@@ -1175,7 +1205,12 @@ export class World {
       const k = this.free.indexOf(this.hi);
       if (k >= 0) this.free.splice(k, 1);
     }
-    for (const g of this.groups) if (g.alive && g.count <= 0) g.alive = false;
+    for (const g of this.groups) {
+      if (g.alive && g.count <= 0) {
+        g.alive = false;
+        if (g.peak >= 25) this.events.push({ t: 'groupLost', x: g.cx, y: g.cy, team: g.team, n: g.peak });
+      }
+    }
     if (this.tick % 120 === 0) {
       this.rocks = this.rocks.filter((r) => r.alive || this.groups.some((g) => g.alive && g.order.rock === r.id));
       this.reindexRocks();
@@ -1217,7 +1252,10 @@ export class World {
 
   private checkEnd(): void {
     for (const t of this.teams) {
-      if (t.alive && t.units <= 0 && this.tick > 2) t.alive = false;
+      if (t.alive && t.units <= 0 && this.tick > 2) {
+        t.alive = false;
+        this.events.push({ t: 'teamOut', x: t.homeX, y: t.homeY, team: t.id });
+      }
     }
     if (this.winner >= 0) return;
     const player = this.teams[0];
