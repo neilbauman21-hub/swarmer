@@ -67,10 +67,10 @@ export function updateShips(w: World): void {
     const tx = w.ux[target], ty = w.uy[target];
     if (s.type === ShipType.Siege) {
       const dist = Math.hypot(tx - s.x, ty - s.y);
-      w.shells.push({ x0: s.x, y0: s.y, x1: tx, y1: ty, t: 0, dur: 0.6 + dist / 380, dmg: st.damage, splash: st.splash, team: SHIP_TEAM, big: true });
+      w.shells.push({ x0: s.x, y0: s.y, x1: tx, y1: ty, t: 0, dur: 0.6 + dist / 380, dmg: st.damage, splash: st.splash, team: SHIP_TEAM, big: true, hits: 14, role: -1 });
       w.events.push({ t: 'shellFire', x: s.x, y: s.y, team: SHIP_TEAM, r: 1 });
     } else if (s.type === ShipType.Bulwark) {
-      w.splash(tx, ty, st.splash, st.damage, SHIP_TEAM, 0.7);
+      w.splash(tx, ty, st.splash, st.damage, SHIP_TEAM, 0.7, 8);
       w.events.push({ t: 'tracer', x: s.x, y: s.y, x2: tx, y2: ty, team: SHIP_TEAM, r: 2 });
       w.events.push({ t: 'explode', x: tx, y: ty, r: st.splash * 0.7, team: SHIP_TEAM });
     } else {

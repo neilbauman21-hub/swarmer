@@ -1,7 +1,7 @@
 import {
   CRUISE_MAX, CRUISE_RAMP, DASH, DIFFICULTY, DT, Difficulty, ENERGY_MAX, ENERGY_REGEN, FORMATIONS, Formation,
   GRID_CELL, HARVEST_RATE, MASS_PER_UNIT, MAX_RESEARCH_LEVEL, MAX_UNITS, MORPH_TIME, NOVA, PLAYER_CAP,
-  GROWTH_KNEE, REPLICATE_MIN, REPLICATE_RATE, RESEARCH_POINT_BASE, RESEARCH_RATE, ROLES, Role, SHIELD, SHIP_TEAM, SHIPS,
+  GROWTH_KNEE, ARTILLERY_HITS, ARTILLERY_MIN_RANGE, COUNTER, REPLICATE_MIN, REPLICATE_RATE, RESEARCH_POINT_BASE, RESEARCH_RATE, ROLES, Role, SHIELD, SHIP_TEAM, SHIPS,
   ResearchTrack, TEAM_COLORS, UNIT_SPACING,
 } from './config';
 import { Grid } from './grid';
@@ -108,7 +108,7 @@ export interface Ship {
 
 export interface Shell {
   x0: number; y0: number; x1: number; y1: number;
-  t: number; dur: number; dmg: number; splash: number; team: number; big: boolean;
+  t: number; dur: number; dmg: number; splash: number; team: number; big: boolean; hits: number; role: number;
 }
 
 export interface Bomb { x: number; y: number; t: number; fuse: number; r: number; dmg: number }
@@ -160,6 +160,7 @@ export class World {
   private readonly sepY = new Float32Array(MAX_UNITS);
   hi = 0; // high-water mark of unit slots in use
   private free: number[] = [];
+  private splashHits: number[] = [];
 
   groups: Group[] = [];
   teams: Team[] = [];
@@ -433,8 +434,12 @@ export class World {
     let rx = 0, ry = 0;
     for (const i of units.slice(0, units.length - half.length)) { rx += this.ux[i]; ry += this.uy[i]; }
     const rest = units.length - half.length;
-    g.ax = rx / rest - nx * push; g.ay = ry / rest - ny * push;
-    this.setOrder(g, 'idle', g.ax, g.ay);
+    // The remaining half keeps working (harvest, replicate, attack...); the new half awaits orders.
+    const keepsOrder = g.order.type !== 'idle' && g.order.type !== 'move';
+    g.ax = rx / rest - (keepsOrder ? 0 : nx * push);
+    g.ay = ry / rest - (keepsOrder ? 0 : ny * push);
+    if (!keepsOrder) this.setOrder(g, 'idle', g.ax, g.ay);
+    else if (g.order.type === 'replicate' && g.count < REPLICATE_MIN) this.setOrder(g, 'idle', g.ax, g.ay);
     this.setOrder(ng, 'idle', ng.ax, ng.ay);
     return ng.id;
   }
@@ -684,7 +689,7 @@ export class World {
         }
         gx = tx; gy = ty;
         // Melee roles dive in; ranged ones hold at range.
-        stopDist = g.role === Role.Striker ? 0 : Math.max(0, tr + this.rangeOf(g) * 0.75 + g.radius * 0.3);
+        stopDist = g.role === Role.Striker ? 0 : tr * 0.55 + this.rangeOf(g) * 0.6 + 10;
         break;
       }
       case 'harvest': {
@@ -774,9 +779,10 @@ export class World {
       g.hx += (fx / fd - g.hx) * Math.min(1, DT * 4);
       g.hy += (fy / fd - g.hy) * Math.min(1, DT * 4);
       if (dist < stopDist - 40) {
-        // Too close for a ranged group: back off a little.
-        g.ax -= (dx / (dist || 1)) * this.speedOf(g) * 0.4 * DT;
-        g.ay -= (dy / (dist || 1)) * this.speedOf(g) * 0.4 * DT;
+        // Too close for a ranged group: back off. Artillery kites hard to keep its guns usable.
+        const kite = g.role === Role.Artillery ? 0.9 : 0.4;
+        g.ax -= (dx / (dist || 1)) * this.speedOf(g) * kite * DT;
+        g.ay -= (dy / (dist || 1)) * this.speedOf(g) * kite * DT;
       }
     }
     const hl = Math.hypot(g.hx, g.hy) || 1;
@@ -811,22 +817,36 @@ export class World {
     this.events.push({ t: 'nova', x: g.cx, y: g.cy, r, team: g.team, n });
   }
 
-  /** Area damage with linear falloff to `edge` fraction at the rim. */
-  splash(x: number, y: number, r: number, dmg: number, team: number, edge = 0.5): void {
+  /** Area damage with linear falloff to `edge` fraction at the rim, hitting at most `maxHits` units (nearest first). */
+  splash(x: number, y: number, r: number, dmg: number, team: number, edge = 0.5, maxHits = Infinity, role = -1): void {
     const r2 = r * r;
-    const grid = this.grid;
-    grid.query(x, y, r, (i) => {
+    const hits = this.splashHits;
+    hits.length = 0;
+    this.grid.query(x, y, r, (i) => {
       if (!this.ualive[i] || this.uteam[i] === team) return;
       const dx = this.ux[i] - x, dy = this.uy[i] - y;
       const d2 = dx * dx + dy * dy;
-      if (d2 > r2) return;
-      const f = 1 - (1 - edge) * Math.sqrt(d2) / r;
-      this.damageUnit(i, dmg * f, team);
-      // Knockback sells the impact.
-      const d = Math.sqrt(d2) || 1;
-      this.uvx[i] += (dx / d) * 220 * f;
-      this.uvy[i] += (dy / d) * 220 * f;
+      if (d2 <= r2) hits.push(i, d2);
     });
+    let n = hits.length / 2;
+    let order: number[] | null = null;
+    if (n > maxHits) {
+      order = Array.from({ length: n }, (_, k) => k).sort((a, b) => hits[a * 2 + 1] - hits[b * 2 + 1]);
+      n = maxHits;
+    }
+    for (let k = 0; k < n; k++) {
+      const h = order ? order[k] : k;
+      const i = hits[h * 2];
+      const d = Math.sqrt(hits[h * 2 + 1]);
+      const f = 1 - (1 - edge) * d / r;
+      const counter = role >= 0 ? COUNTER[role][this.groups[this.ugroup[i]].role] : 1;
+      this.damageUnit(i, dmg * f * counter, team);
+      // Knockback sells the impact.
+      const dx = this.ux[i] - x, dy = this.uy[i] - y;
+      const dl = d || 1;
+      this.uvx[i] += (dx / dl) * 220 * f;
+      this.uvy[i] += (dy / dl) * 220 * f;
+    }
     if (team !== SHIP_TEAM) {
       for (const s of this.ships) {
         if (!s.alive) continue;
@@ -937,7 +957,9 @@ export class World {
               dvy = dvy * 0.2 + (ddy / d) * maxSp * (0.8 + lunge * 0.6);
             }
           }
-          if (d <= range + tr && ucd[i] <= 0 && g.morphT <= 0 && g.novaT <= 0) {
+          const tooClose = g.role === Role.Artillery && d < ARTILLERY_MIN_RANGE;
+          if (tooClose && (this.tick + i) % 10 === 5) utgt[i] = -1; // look for something farther away
+          if (d <= range + tr && !tooClose && ucd[i] <= 0 && g.morphT <= 0 && g.novaT <= 0) {
             this.fire(i, g, t, tx, ty);
           }
         }
@@ -950,7 +972,7 @@ export class World {
         const ram = (g.role === Role.Striker ? DASH.strikerRam : DASH.ramDamage) * (1 + 0.2 * team.levels.damage);
         grid.query(x, y, 10, (j) => {
           if (ualive[j] && uteam[j] !== g.team) {
-            this.damageUnit(j, ram, g.team);
+            this.damageUnit(j, ram * COUNTER[g.role][this.groups[ugroup[j]].role], g.team);
             uvx[j] += uvx[i] * 0.4;
             uvy[j] += uvy[i] * 0.4;
             this.events.push({ t: 'melee', x: ux[j], y: uy[j], team: g.team });
@@ -1098,7 +1120,7 @@ export class World {
       const d = Math.hypot(tx - this.ux[i], ty - this.uy[i]);
       this.shells.push({
         x0: this.ux[i], y0: this.uy[i], x1: tx + this.rng.range(-8, 8), y1: ty + this.rng.range(-8, 8),
-        t: 0, dur: 0.35 + d / 420, dmg, splash: role.splash, team: g.team, big: false,
+        t: 0, dur: 0.35 + d / 420, dmg, splash: role.splash, team: g.team, big: false, hits: ARTILLERY_HITS, role: g.role,
       });
       this.events.push({ t: 'shellFire', x: this.ux[i], y: this.uy[i], team: g.team });
       // Recoil.
@@ -1106,7 +1128,7 @@ export class World {
       this.uvy[i] -= ((ty - this.uy[i]) / (d || 1)) * 60;
       return;
     }
-    if (t >= 0) this.damageUnit(t, dmg, g.team);
+    if (t >= 0) this.damageUnit(t, dmg * COUNTER[g.role][this.groups[this.ugroup[t]].role], g.team);
     else {
       const s = this.ships[-t - 2];
       this.damageShip(s, dmg, g.team);
@@ -1120,7 +1142,7 @@ export class World {
     for (const s of this.shells) {
       s.t += DT;
       if (s.t >= s.dur) {
-        this.splash(s.x1, s.y1, s.splash, s.dmg, s.team);
+        this.splash(s.x1, s.y1, s.splash, s.dmg, s.team, 0.5, s.hits, s.role);
         this.events.push({ t: 'explode', x: s.x1, y: s.y1, r: s.splash, team: s.team });
       }
     }
@@ -1130,7 +1152,7 @@ export class World {
       if (b.t >= b.fuse) {
         this.splash(b.x, b.y, b.r, b.dmg, SHIP_TEAM, 0.6);
         this.events.push({ t: 'explode', x: b.x, y: b.y, r: b.r, team: SHIP_TEAM, n: 1 });
-        this.pools.push({ x: b.x, y: b.y, r: b.r * 0.85, t: 0, dur: 5, dps: 3 });
+        this.pools.push({ x: b.x, y: b.y, r: b.r * 0.85, t: 0, dur: 5, dps: 7 });
       }
     }
     this.bombs = this.bombs.filter((b) => b.t < b.fuse);

@@ -11,6 +11,7 @@ export interface GameOptions {
   rivals: number;
   size: number;
   seed?: number;
+  demo?: boolean; // attract mode behind the main menu: all AI, no HUD or input
 }
 
 export type Action =
@@ -30,7 +31,7 @@ export class Game {
   readonly world: World;
   readonly renderer: Renderer;
   readonly fx = new Fx();
-  readonly hud: Hud;
+  readonly hud: Hud | null;
   readonly selected = new Set<number>();
   readonly cam: Camera;
   private under = new SpriteBatch(1024);
@@ -72,11 +73,17 @@ export class Game {
     this.overlay = over.getContext('2d')!;
     const home = this.world.teams[0];
     this.cam = { x: home.homeX, y: home.homeY, zoom: 1.1, tx: home.homeX, ty: home.homeY, tzoom: 1.1 };
-    this.hud = new Hud(root, this);
-    this.bindInput(canvas);
     this.resize();
-    const start = this.world.groupsOf(0)[0];
-    if (start) this.selected.add(start.id);
+    if (opts.demo) {
+      this.hud = null;
+      this.world.teams[0].ai = true;
+      this.cam.zoom = this.cam.tzoom = 0.7;
+    } else {
+      this.hud = new Hud(root, this);
+      this.bindInput(canvas);
+      const start = this.world.groupsOf(0)[0];
+      if (start) this.selected.add(start.id);
+    }
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -85,7 +92,7 @@ export class Game {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
     for (const c of this.cleanup) c();
-    this.hud.destroy();
+    this.hud?.destroy();
     this.root.innerHTML = '';
   }
 
@@ -125,13 +132,14 @@ export class Game {
     const bounds = this.viewBounds();
     this.fx.handle(events, bounds);
     this.audio.tick(dt);
-    this.audio.play(events, (x, y) => this.audibility(x, y));
+    if (this.opts.demo) this.directDemoCamera(dt);
+    else this.audio.play(events, (x, y) => this.audibility(x, y));
     this.onEvents(events);
     this.pruneSelection();
     this.updateCamera(dt);
     this.updateHover();
     this.render();
-    this.hud.update(dt);
+    this.hud?.update(dt);
     this.checkEnd();
   };
 
@@ -139,7 +147,7 @@ export class Game {
     for (const e of events) {
       if (e.t === 'wave') {
         const dir = this.compass(e.x, e.y);
-        this.hud.banner(`Raider fleet inbound from the ${dir} — ${e.n} ships`, '#ffb357');
+        this.hud?.banner(`Raider fleet inbound from the ${dir} — ${e.n} ships`, '#ffb357');
         this.alerts.push({ x: e.x, y: e.y, t: 8, color: '#ffb357', label: 'Raiders' });
       }
     }
@@ -160,7 +168,30 @@ export class Game {
     return dy > 0 ? 'south' : 'north';
   }
 
+  /** Attract mode: drift toward the most interesting action. */
+  private demoFocus = -1;
+  private demoTimer = 0;
+  private directDemoCamera(dt: number): void {
+    this.demoTimer -= dt;
+    const w = this.world;
+    let g = w.groups[this.demoFocus];
+    if (this.demoTimer <= 0 || !g?.alive) {
+      // Prefer groups in combat, then the largest.
+      const live = w.groups.filter((x) => x.alive && x.count > 10);
+      live.sort((a, b) => (b.combatT < 1 ? 1000 : 0) + b.count - ((a.combatT < 1 ? 1000 : 0) + a.count));
+      g = live[0];
+      this.demoFocus = g?.id ?? -1;
+      this.demoTimer = 9;
+    }
+    if (!g) return;
+    const k = 1 - Math.exp(-dt * 0.6);
+    this.cam.tx += (g.cx - this.cam.tx) * k;
+    this.cam.ty += (g.cy - this.cam.ty) * k;
+    this.cam.tzoom = 0.75 + 0.15 * Math.sin(this.time * 0.1);
+  }
+
   private checkEnd(): void {
+    if (this.opts.demo) return;
     if (this.ended || this.world.winner < 0) return;
     this.ended = true;
     const won = this.world.winner === 0;
@@ -539,7 +570,7 @@ export class Game {
         return;
       }
       if (this.paused) return;
-      if (k === 'y') { this.hud.toggleResearch(); return; }
+      if (k === 'y') { this.hud?.toggleResearch(); return; }
       if ((e.ctrlKey || e.metaKey) && k === 'a') { e.preventDefault(); this.action('selectAll'); return; }
       if (k === '`') { this.action('selectAll'); return; }
       if (k === 'tab' || k === ' ') e.preventDefault();
@@ -597,7 +628,7 @@ export class Game {
         this.selected.add(g.id);
       }
       this.audio.ui('select');
-      this.hud.notify('select');
+      this.hud?.notify('select');
     } else if (!shift) {
       this.selected.clear();
     }
@@ -615,7 +646,7 @@ export class Game {
     }
     if (this.selected.size) {
       this.audio.ui('select');
-      this.hud.notify('select');
+      this.hud?.notify('select');
     }
   }
 
@@ -628,11 +659,11 @@ export class Game {
     if (this.hoverShip >= 0) {
       w.cmdAttackShip(ids, this.hoverShip);
       this.ping(wx, wy, '#ff7b6b');
-      this.hud.notify('attack');
+      this.hud?.notify('attack');
     } else if (this.hoverGroup >= 0 && w.groups[this.hoverGroup].team !== 0) {
       w.cmdAttackGroup(ids, this.hoverGroup);
       this.ping(wx, wy, '#ff7b6b');
-      this.hud.notify('attack');
+      this.hud?.notify('attack');
     } else if (this.hoverGroup >= 0 && !this.selected.has(this.hoverGroup)) {
       // Join a friendly group: merge right away if close, otherwise fly over and merge.
       const target = w.groups[this.hoverGroup];
@@ -643,11 +674,11 @@ export class Game {
       w.cmdHarvest(ids, this.hoverRock);
       const r = w.rocks[this.hoverRock];
       this.ping(r.x, r.y, '#e8c98f');
-      this.hud.notify('harvest');
+      this.hud?.notify('harvest');
     } else {
       w.cmdMove(ids, wx, wy);
       this.ping(wx, wy, '#7fe3ff');
-      this.hud.notify('move');
+      this.hud?.notify('move');
     }
     this.audio.ui('order');
   }
@@ -668,7 +699,7 @@ export class Game {
         const keep = w.cmdMerge([t.id, ...ready]);
         for (const id of ready) this.selected.delete(id);
         if (keep >= 0 && ready.length) this.selected.add(keep);
-        this.hud.notify('merge');
+        this.hud?.notify('merge');
       }
       return live.length > ready.length;
     });
@@ -729,7 +760,7 @@ export class Game {
           // Select the halves nearest the cursor so they can be sent off immediately.
           this.selected.clear();
           for (const id of fresh) this.selected.add(id);
-          this.hud.notify('split');
+          this.hud?.notify('split');
         }
         break;
       }
@@ -738,39 +769,39 @@ export class Game {
         const keep = w.cmdMerge(ids);
         this.selected.clear();
         if (keep >= 0) this.selected.add(keep);
-        this.hud.notify('merge');
+        this.hud?.notify('merge');
         break;
       }
       case 'replicate':
         ok = w.cmdReplicate(ids);
-        if (ok) this.hud.notify('replicate');
+        if (ok) this.hud?.notify('replicate');
         break;
       case 'research':
         w.cmdResearch(ids);
-        this.hud.notify('research');
+        this.hud?.notify('research');
         break;
       case 'stop':
         w.cmdStop(ids);
         break;
       case 'dash':
         ok = w.cmdDash(ids, mx, my);
-        if (ok) this.hud.notify('ability');
+        if (ok) this.hud?.notify('ability');
         break;
       case 'shield':
         ok = w.cmdShield(ids);
-        if (ok) this.hud.notify('ability');
+        if (ok) this.hud?.notify('ability');
         break;
       case 'nova':
         ok = w.cmdNova(ids);
-        if (ok) this.hud.notify('ability');
+        if (ok) this.hud?.notify('ability');
         break;
       case 'f0': case 'f1': case 'f2': case 'f3':
         w.cmdFormation(ids, Number(a[1]) as Formation);
-        this.hud.notify('formation');
+        this.hud?.notify('formation');
         break;
       case 'm0': case 'm1': case 'm2': case 'm3': case 'm4':
         w.cmdMorph(ids, Number(a[1]) as Role);
-        this.hud.notify('morph');
+        this.hud?.notify('morph');
         break;
     }
     this.audio.ui(ok ? 'click' : 'error');

@@ -57,10 +57,34 @@ function choice<T>(el: HTMLElement, name: string, values: T[], labels: string[],
   });
 }
 
+let demo: Game | null = null;
+const demoRoot = document.createElement('div');
+demoRoot.className = 'menu-demo';
+
+function startDemo(): void {
+  if (demo) return;
+  document.body.prepend(demoRoot);
+  try {
+    demo = new Game(demoRoot, { difficulty: Difficulty.Hard, rivals: 3, size: 4500, demo: true, seed: (Math.random() * 1e9) | 0 }, audio);
+    // Skip the slow opening so the menu shows a living swarm.
+    for (let i = 0; i < 60 * 70; i++) demo.world.step();
+    demo.world.drainEvents();
+  } catch {
+    demo = null;
+  }
+}
+
+function stopDemo(): void {
+  demo?.destroy();
+  demo = null;
+  demoRoot.remove();
+}
+
 function menu(): void {
   closeScreens();
   game?.destroy();
   game = null;
+  startDemo();
   const opts = { ...lastOpts };
   const el = screen('menu', `
     <div class="menu-card">
@@ -85,6 +109,7 @@ function menu(): void {
 
 function start(opts: GameOptions): void {
   closeScreens();
+  stopDemo();
   game?.destroy();
   try {
     game = new Game(app, { ...opts, seed: (Math.random() * 1e9) | 0 }, audio);

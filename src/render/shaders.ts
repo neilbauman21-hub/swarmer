@@ -158,9 +158,14 @@ void main(){
     vec3 base=v_param.y>0.5? vec3(0.32,0.28,0.25) : vec3(0.30,0.26,0.24);
     vec3 col=base*(0.18+lit*0.95)*(0.8+crater*0.4);
     if(v_param.y>0.5){ col+=vec3(1.0,0.5,0.15)*smoothstep(0.75,0.95,crater)*0.8; }
-    // mineral veins that glow with harvestable mass
-    float vein=smoothstep(0.92,1.0,vnoise(ang*6.0+r*9.0,s+11.0));
-    col+=c.rgb*vein*0.9*c.a;
+    // crystal deposits that glow with harvestable mass
+    vec2 cp=v_uv*4.5+s;
+    vec2 ci=floor(cp), cf=fract(cp)-0.5;
+    float cr=fract(sin(dot(ci,vec2(12.9898,78.233))+s)*43758.5453);
+    vec2 co=vec2(fract(cr*13.7),fract(cr*7.3))-0.5;
+    float crystal=smoothstep(0.22,0.05,length(cf-co*0.5))*step(0.55,cr)*smoothstep(0.95,0.6,r/edge);
+    col=mix(col,c.rgb*(0.6+lit),crystal*0.85*min(c.a,1.0));
+    col+=c.rgb*crystal*max(0.0,c.a-1.0)*0.8;
     float rim=smoothstep(0.05,0.0,abs(d+0.03))*lit;
     col+=vec3(0.5,0.6,0.7)*rim*0.25;
     o=vec4(col*fill,fill);

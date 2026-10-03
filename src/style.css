@@ -80,10 +80,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* Command bar */
 .command-bar {
-  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: stretch;
+  position: absolute; bottom: 12px; left: 224px; right: 12px; margin: 0 auto; width: fit-content; display: flex; gap: 14px; align-items: stretch;
   background: var(--panel); border: 1px solid var(--panel-border); border-radius: 14px; padding: 10px 14px;
   backdrop-filter: blur(10px); box-shadow: 0 10px 40px rgba(0,0,0,0.45); transition: opacity 0.2s;
-  max-width: calc(100vw - 460px);
+  max-width: calc(100vw - 236px); flex-wrap: wrap; justify-content: center;
 }
 .command-bar.empty .cmd-section { opacity: 0.3; pointer-events: none; }
 .sel-info { display: flex; flex-direction: column; justify-content: center; min-width: 108px; gap: 4px; }
@@ -138,7 +138,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 @keyframes bannerIn { from { opacity: 0; transform: translateY(-16px) scale(0.9); } }
 
 .tutorial {
-  position: absolute; bottom: 104px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
+  position: absolute; bottom: 118px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
   padding: 10px 12px 10px 16px; border-radius: 12px; font-size: 13px; max-width: 640px;
   background: rgba(10, 30, 50, 0.85); border: 1px solid rgba(90, 216, 255, 0.35); box-shadow: 0 0 30px rgba(90,216,255,0.15);
   transition: opacity 0.5s, transform 0.5s;
@@ -158,6 +158,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   opacity: 0; transition: opacity 0.35s;
 }
 .screen.in { opacity: 1; }
+.screen.menu { background: radial-gradient(ellipse at 50% 45%, rgba(4, 8, 20, 0.35), rgba(2, 3, 8, 0.8)); }
+.screen.menu .menu-card { background: rgba(8, 13, 26, 0.72); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .screen.pause, .screen.end { background: rgba(2, 4, 10, 0.6); backdrop-filter: blur(6px); }
 .menu-card {
   width: min(520px, calc(100vw - 32px)); padding: 32px; border-radius: 20px; text-align: center;
@@ -198,8 +200,13 @@ summary { cursor: pointer; font-weight: 700; }
 .end-stats small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .end.lost h1 { background: linear-gradient(120deg, #ff7b6b, #b98cff); -webkit-background-clip: text; background-clip: text; }
 
-@media (max-width: 1200px) {
-  .command-bar { max-width: calc(100vw - 24px); bottom: 220px; flex-wrap: wrap; justify-content: center; }
-  .cmd { width: 44px; height: 44px; }
-  .tutorial { bottom: 330px; }
+@media (max-width: 1500px) {
+  .cmd { width: 44px; height: 46px; }
+  .cmd .cmd-label { font-size: 8px; }
+  .command-bar { gap: 10px; padding: 8px 10px; }
+  .cmd-section { padding-left: 10px; }
 }
+@media (max-width: 1280px) {
+  .tutorial { bottom: 200px; }
+}
+.menu-demo { position: fixed; inset: 0; }

@@ -1,0 +1,50 @@
+# Swarmer
+
+A real-time swarm strategy game for the browser, inspired by [nohope.io](https://nohope.io) (and the older *Eufloria*). You command thousands of glowing units: harvest asteroids into new units, split and merge groups, morph them into specialised roles, switch formations, and fire off abilities to wipe out rival swarms while raider fleets hunt everyone.
+
+```bash
+npm install
+npm run dev      # http://localhost:5173
+npm test         # simulation tests
+npm run build    # static build in dist/
+```
+
+Requires a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari). Desktop, mouse and keyboard.
+
+## What's different from nohope.io
+
+| | nohope.io | Swarmer |
+|---|---|---|
+| Movement | particles drift to a click target | **shape-field formations**: each unit projects itself into its formation's shape and steers there, with separation, momentum and a velocity streak. Formation changes animate themselves and nobody shuffles when units die. Long trips build cruise speed. |
+| Fighting | swarms trade damage | **counter triangle** (Striker > Artillery > Tank > Striker, Drones as generalists), **4 formations** with real trade-offs, **3 abilities** (Dash ram, Hex Shield, Nova self-detonation), artillery shells with splash, knockback |
+| Feedback | | bloom, tracers, death sparks, shockwaves, screen shake, hit-stop on big kills, chromatic aberration, procedural sound |
+| Opponents | ships + arena | up to 3 AI rival swarms that harvest, replicate, research, split, retreat, morph and launch armies, plus escalating raider waves (Scout, Bomber, Bulwark, Siege) that leave rich wrecks |
+| Onboarding | | 8-step contextual tutorial, tooltips on every command, live AI battle behind the menu |
+
+## Controls
+
+| Input | Action |
+|---|---|
+| LMB click / drag | Select groups (Shift adds, double-click = all on screen) |
+| RMB | Context command: move, attack enemy, harvest rock, or fly over and join a friendly group |
+| Wheel, MMB drag, arrows, screen edge | Zoom to cursor, pan |
+| `S` / `G` / `H` | Split toward cursor / merge / hold |
+| `B` / `T` / `Y` | Replicate (20+ units) / research / research panel |
+| `Q` / `E` / `R` | Dash toward cursor / shield / nova |
+| `Z` `X` `C` `V` | Swarm / Wedge / Ring / Line formation |
+| `1`–`5` | Morph: Drone, Striker, Tank, Harvester, Artillery |
+| `Tab` / `Space` / `` ` `` | Cycle groups / center camera / select all |
+| `P` / `Esc` | Pause |
+
+## Architecture
+
+```
+src/sim/      deterministic 60 Hz simulation (no DOM): world, AI, raiders, config
+src/render/   WebGL2 renderer: one instanced SDF sprite shader, bloom chain, particles
+src/ui/       HUD (DOM), procedural WebAudio
+src/game.ts   loop, camera, input, selection, overlay
+```
+
+- Units live in typed arrays (structure of arrays) with a counting-sort spatial hash, about 2.7 ms per tick at 6000 units.
+- Growth is logistic (it slows as a team grows), so splitting into many small groups isn't an exploit.
+- All balance numbers live in `src/sim/config.ts`.
