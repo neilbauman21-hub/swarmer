@@ -39,6 +39,21 @@ Wedge: +25% damage. Ring: +30% armor. Line: +30% range. Harvesters harvest and r
 Splitting work across several rocks grows the swarm faster than one big blob.
 If the player says "these" or "selected", use state.selected; otherwise command all of state.groups.
 
+EXAMPLE (order: "wedge formation, then harvest the closest rock with every group")
+\`\`\`js
+function tick(state, api, memory) {
+  for (const g of state.groups) {
+    if (memory[g.id]) continue;            // already ordered this group
+    const rock = nearest(g, state.rocks);  // pass objects, not strings
+    if (!rock) continue;
+    api.formation(g, 'wedge');
+    api.harvest(g, rock);
+    memory[g.id] = rock.id;
+  }
+  if (state.groups.every((g) => memory[g.id])) api.done();
+}
+\`\`\`
+
 Answer with only the code block.`;
 
 /** Pull the first code block (or the whole text) out of a model reply. */

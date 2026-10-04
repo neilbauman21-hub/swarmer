@@ -11,12 +11,19 @@ interface Env {
   SWARM_MODELS?: string;
 }
 
-const DEFAULT_MODELS = ['@cf/zai-org/glm-4.7-flash', '@cf/openai/gpt-oss-120b', '@cf/moonshotai/kimi-k2.7-code'];
+const DEFAULT_MODELS = ['@cf/openai/gpt-oss-120b', '@cf/meta/llama-4-scout-17b-16e-instruct'];
+const hits = new Map<string, number[]>(); // best-effort per-isolate rate limit
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
 export async function onRequestPost({ request, env }: { request: Request; env: Env }): Promise<Response> {
   if (!env.AI) return json({ error: 'The AI binding is not configured on this deployment.' }, 503);
+  const ip = request.headers.get('cf-connecting-ip') ?? 'anon';
+  const now = Date.now();
+  const recent = (hits.get(ip) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= 8) return json({ error: 'Too many designs in a minute. Give it a moment.' }, 429);
+  recent.push(now);
+  hits.set(ip, recent);
   let body: { prompt?: unknown; unlocked?: unknown };
   try {
     body = await request.json();

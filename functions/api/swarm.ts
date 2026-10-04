@@ -14,7 +14,9 @@ interface Ctx {
   env: Env;
 }
 
-const DEFAULT_MODELS = ['@cf/zai-org/glm-4.7-flash', '@cf/openai/gpt-oss-120b', '@cf/moonshotai/kimi-k2.7-code'];
+// Measured on the production prompt: llama-4-scout answers in ~7 s; gpt-oss-120b is slower but sturdier.
+// Reasoning-first models (glm-4.7-flash, gpt-oss-20b, qwen3) spent the whole budget thinking and returned nothing.
+const DEFAULT_MODELS = ['@cf/meta/llama-4-scout-17b-16e-instruct', '@cf/openai/gpt-oss-120b'];
 const MAX_PROMPT = 500;
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 12;
@@ -50,7 +52,7 @@ export async function onRequestPost({ request, env }: Ctx): Promise<Response> {
   recent.push(now);
   hits.set(ip, recent);
 
-  let body: { prompt?: unknown; context?: unknown };
+  let body: { prompt?: unknown; context?: unknown; fix?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -59,10 +61,15 @@ export async function onRequestPost({ request, env }: Ctx): Promise<Response> {
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, MAX_PROMPT) : '';
   if (!prompt) return json({ error: 'Type an order for your swarm first.' }, 400);
   const context = typeof body.context === 'string' ? body.context.slice(0, 2500) : '';
+  // Self-repair: the browser sends back a program that crashed or did nothing, with the reason.
+  const fix = body.fix && typeof body.fix === 'object' ? (body.fix as { code?: unknown; error?: unknown }) : null;
+  const fixNote = fix && typeof fix.code === 'string'
+    ? `\n\nYour previous program for this order failed: ${String(fix.error ?? 'it issued no orders').slice(0, 300)}\nPrevious program:\n\`\`\`js\n${fix.code.slice(0, 4000)}\n\`\`\`\nWrite a corrected program.`
+    : '';
 
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: `Current game: ${context}\n\nPlayer order: ${prompt}` },
+    { role: 'user', content: `Current game: ${context}\n\nPlayer order: ${prompt}${fixNote}` },
   ];
   const models = env.SWARM_MODELS ? env.SWARM_MODELS.split(',').map((m) => m.trim()).filter(Boolean) : DEFAULT_MODELS;
   const errors: string[] = [];

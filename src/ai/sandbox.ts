@@ -13,10 +13,21 @@ for (const k of ['fetch','XMLHttpRequest','WebSocket','EventSource','importScrip
 const send = self.postMessage.bind(self);
 let tick = null;
 let memory = {};
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const pt = (p) => {
+  if (p && typeof p === 'object' && !Array.isArray(p)) return { x: +p.x, y: +p.y };
+  if (Array.isArray(p)) return { x: +p[0], y: +p[1] };
+  if (typeof p === 'string') { const m = p.split(','); return { x: +m[0], y: +m[1] }; }
+  return { x: NaN, y: NaN };
+};
+// Forgiving helpers: accept objects, [x,y] arrays, "x,y" strings, or dist(x1,y1,x2,y2).
+const dist = (a, b, c, d) => {
+  if (typeof a === 'number' && typeof b === 'number' && typeof c === 'number' && typeof d === 'number') return Math.hypot(a - c, b - d);
+  const p = pt(a), q = pt(b);
+  return Math.hypot(p.x - q.x, p.y - q.y);
+};
 const nearest = (from, list) => { let best = null, bd = Infinity; for (const it of list || []) { const d = dist(from, it); if (d < bd) { bd = d; best = it; } } return best; };
 const byDistance = (from, list) => [...(list || [])].sort((a, b) => dist(from, a) - dist(from, b));
-const centroid = (list) => { let x = 0, y = 0, n = 0; for (const g of list || []) { x += g.x * (g.count || 1); y += g.y * (g.count || 1); n += g.count || 1; } return n ? { x: x / n, y: y / n } : null; };
+const centroid = (list) => { let x = 0, y = 0, n = 0; for (const g of list || []) { const p = pt(g); x += p.x * (g.count || 1); y += p.y * (g.count || 1); n += g.count || 1; } return n ? { x: x / n, y: y / n } : null; };
 self.onmessage = (e) => {
   const m = e.data;
   if (m.type === 'load') {

@@ -100,7 +100,7 @@ export class PromptDock {
         if (n) this.renderStatus();
       },
       onLog: (lines) => this.log(lines),
-      onError: (msg) => this.setStatus('error', msg),
+      onError: (msg) => this.onProgramError(msg),
       onDone: () => this.setStatus('done'),
     });
     this.renderStatus();
@@ -200,10 +200,19 @@ export class PromptDock {
   /** Called 4x per second of game time. */
   tick(): void {
     if (!this.sandbox.running) return;
+    this.ranFor++;
+    if (this.ranFor === 24 && this.applied === 0 && this.aiProgram) this.renderStatus(); // show the "fix it" link
     this.sandbox.tick(snapshot(this.game.world, 0, this.game.selected));
   }
 
+  private thinkingSince = 0;
+  private thinkingShown = -1;
+
   update(dt: number): void {
+    if (this.status === 'thinking') {
+      const secs = Math.floor((performance.now() - this.thinkingSince) / 1000);
+      if (secs !== this.thinkingShown) { this.thinkingShown = secs; this.renderStatus(); }
+    }
     if (this.focused || this.input.value) return;
     this.placeholderTimer += dt;
     if (this.placeholderTimer > 6) {
@@ -236,12 +245,38 @@ export class PromptDock {
     this.label = prompt;
     this.setStatus('thinking');
     if (this.mode === 'design') return this.design(prompt);
+    this.attempt = 0;
+    this.fixNote = '';
+    return this.ask(prompt);
+  }
+
+  // ---- self-repair: a program that crashes is sent back to the model with the error
+  private attempt = 0;
+  private aiProgram = false;
+  private ranFor = 0; // ticks since the current program started
+
+  private onProgramError(msg: string): void {
+    if (this.aiProgram && this.attempt < 2) {
+      this.attempt++;
+      this.fixNote = `Fixing the program (attempt ${this.attempt}/2): ${msg}`;
+      void this.ask(this.label, { code: this.sandbox.source, error: msg });
+      return;
+    }
+    this.setStatus('error', msg);
+  }
+
+  private fixNote = '';
+
+  private async ask(prompt: string, fix?: { code: string; error: string }): Promise<void> {
+    this.request?.abort();
+    this.request = new AbortController();
+    this.setStatus('thinking');
     try {
       const context = describe(snapshot(this.game.world, 0, this.game.selected));
       const res = await fetch('api/swarm', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, context }),
+        body: JSON.stringify({ prompt, context, fix }),
         signal: this.request.signal,
       });
       const data = (await res.json().catch(() => null)) as { code?: string; error?: string; model?: string } | null;
@@ -293,6 +328,9 @@ export class PromptDock {
   private run(code: string, label: string, source: string): void {
     this.label = label;
     this.applied = 0;
+    this.ranFor = 0;
+    this.aiProgram = source !== 'example';
+    if (source === 'example') this.fixNote = '';
     this.logEl.innerHTML = '';
     this.codeEl.textContent = `// ${source === 'example' ? 'Ready-made program' : `Written by ${source}`}\n${code}`;
     this.sandbox.load(code);
@@ -314,6 +352,7 @@ export class PromptDock {
   private setStatus(s: Status, msg = ''): void {
     this.status = s;
     this.errorMsg = msg;
+    if (s === 'thinking') { this.thinkingSince = performance.now(); this.thinkingShown = 0; }
     if (s === 'error') this.game.audio.ui('error');
     this.renderStatus();
   }
@@ -327,9 +366,14 @@ export class PromptDock {
     if (s === 'idle') html = this.mode === 'command'
       ? '<span class="dot"></span>Type an order in plain English. The swarm writes its own program and runs it.'
       : '<span class="dot"></span>Describe a construct. The AI lays out the particles using the parts you have researched (Y).';
-    else if (s === 'thinking') html = this.mode === 'command' ? `<span class="dot"></span>Writing a program for “${esc(this.label)}”…` : `<span class="dot"></span>Designing “${esc(this.label)}”…`;
+    else if (s === 'thinking' && this.fixNote && this.attempt > 0) html = `<span class="dot"></span>${esc(this.fixNote)} <span class="secs">${Math.max(0, this.thinkingShown)}s</span>`;
+    else if (s === 'thinking') html = (this.mode === 'command' ? `<span class="dot"></span>Writing a program for “${esc(this.label)}”…` : `<span class="dot"></span>Designing “${esc(this.label)}”…`) + ` <span class="secs">${Math.max(0, this.thinkingShown)}s</span>`;
     else if (s === 'designed') html = `<span class="dot"></span>${esc(this.errorMsg)}`;
-    else if (s === 'running') html = `<span class="dot"></span>Running “${esc(this.label)}” · ${this.applied} orders issued`;
+    else if (s === 'running') {
+      html = `<span class="dot"></span>Running “${esc(this.label)}” · ${this.applied} orders issued`;
+      if (this.attempt > 0) html += ` · repaired ${this.attempt}x`;
+      if (this.aiProgram && this.applied === 0 && this.ranFor >= 24) html += ' · no orders yet <button type="button" class="link fix">Ask AI to fix it</button>';
+    }
     else if (s === 'done') html = `<span class="dot"></span>Finished “${esc(this.label)}” · ${this.applied} orders issued`;
     else html = `<span class="dot"></span>${esc(this.errorMsg)}`;
     if (this.sandbox?.source && s !== 'thinking') html += ` <button type="button" class="link code-toggle">${this.codeEl.hidden ? 'Show code' : 'Hide code'}</button>`;
@@ -340,6 +384,11 @@ export class PromptDock {
       this.renderStatus();
     });
     el.querySelector('.stop')?.addEventListener('click', () => this.stop());
+    el.querySelector('.fix')?.addEventListener('click', () => {
+      this.attempt++;
+      this.fixNote = 'Fixing the program: it issued no orders';
+      void this.ask(this.label, { code: this.sandbox.source, error: 'It ran for 6 seconds without issuing a single order. Make sure every group gets the order right away.' });
+    });
   }
 }
 

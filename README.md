@@ -40,7 +40,9 @@ Requires a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari). Des
 | `Tab` / `Space` / `` ` `` | Cycle groups / center camera / select all |
 | `P` / `Esc` | Pause |
 
-## Deploying (Cloudflare Pages + Workers AI)
+## Deploying (Cloudflare Worker + Workers AI)
+
+`npm run deploy` publishes a Worker that serves `dist/` and the AI endpoints (`wrangler.worker.toml`). `npm run deploy:pages` is the Pages alternative.
 
 ```bash
 export CLOUDFLARE_API_TOKEN=...   # token with Pages: Edit and Workers AI: Read
@@ -49,7 +51,7 @@ npx wrangler pages project create swarmer --production-branch main   # first tim
 npm run deploy
 ```
 
-`wrangler.toml` binds Workers AI as `AI` for `functions/api/swarm.ts`, so no key ships to players. Models are tried in order (`glm-4.7-flash`, `gpt-oss-120b`, `kimi-k2.7-code`); override with a `SWARM_MODELS` environment variable.
+`wrangler.toml` binds Workers AI as `AI` for `functions/api/swarm.ts`, so no key ships to players. Models are tried in order (orders: `llama-4-scout-17b-16e-instruct`, then `gpt-oss-120b`; designs: the reverse); override with a `SWARM_MODELS` environment variable.
 
 ## Architecture
 
