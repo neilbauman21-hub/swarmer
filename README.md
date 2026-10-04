@@ -2,6 +2,8 @@
 
 A real-time swarm strategy game for the browser, inspired by [nohope.io](https://nohope.io) (and the older *Eufloria*). You command thousands of glowing units: harvest asteroids into new units, split and merge groups, morph them into specialised roles, switch formations, and fire off abilities to wipe out rival swarms while raider fleets hunt everyone.
 
+**Talk to your swarm.** Press `Enter`, type an order like *"split into three, harvest the closest rocks, then hunt Ember with strikers"*, and an LLM (Cloudflare Workers AI) writes a small JavaScript program that commands your swarm live. The code runs in a sandboxed Web Worker with no DOM or network access, gets killed if it hangs, and can only issue validated game orders. Click **Show code** to read what it wrote. nohope.io pioneered the prompt-to-code idea; Swarmer's take adds the sandbox, live code view, persistent standing orders (`memory`), and four ready-made programs that work offline.
+
 ```bash
 npm install
 npm run dev      # http://localhost:5173
@@ -36,12 +38,25 @@ Requires a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari). Des
 | `Tab` / `Space` / `` ` `` | Cycle groups / center camera / select all |
 | `P` / `Esc` | Pause |
 
+## Deploying (Cloudflare Pages + Workers AI)
+
+```bash
+export CLOUDFLARE_API_TOKEN=...   # token with Pages: Edit and Workers AI: Read
+export CLOUDFLARE_ACCOUNT_ID=...
+npx wrangler pages project create swarmer --production-branch main   # first time only
+npm run deploy
+```
+
+`wrangler.toml` binds Workers AI as `AI` for `functions/api/swarm.ts`, so no key ships to players. Models are tried in order (`glm-4.7-flash`, `gpt-oss-120b`, `kimi-k2.7-code`); override with a `SWARM_MODELS` environment variable.
+
 ## Architecture
 
 ```
 src/sim/      deterministic 60 Hz simulation (no DOM): world, AI, raiders, config
 src/render/   WebGL2 renderer: one instanced SDF sprite shader, bloom chain, particles
-src/ui/       HUD (DOM), procedural WebAudio
+src/ai/       prompt protocol, sandboxed program runner, example programs
+functions/    Cloudflare Pages Function that turns prompts into programs
+src/ui/       HUD and prompt dock (DOM), procedural WebAudio
 src/game.ts   loop, camera, input, selection, overlay
 ```
 

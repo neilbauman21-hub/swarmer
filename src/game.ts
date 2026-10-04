@@ -123,6 +123,7 @@ export class Game {
       while (this.acc >= DT && steps < 4) {
         this.world.step();
         for (const e of this.world.drainEvents()) events.push(e);
+        if (this.world.tick % 15 === 0) this.hud?.dock.tick();
         this.acc -= DT;
         steps++;
       }
@@ -656,6 +657,7 @@ export class Game {
         return;
       }
       if (this.paused) return;
+      if (k === 'enter' || k === '/') { e.preventDefault(); this.hud?.dock.focus(); return; }
       if (k === 'y') { this.hud?.toggleResearch(); return; }
       if ((e.ctrlKey || e.metaKey) && k === 'a') { e.preventDefault(); this.action('selectAll'); return; }
       if (k === '`') { this.action('selectAll'); return; }

@@ -18,6 +18,7 @@ try {
 
 const CONTROLS = `
 <div class="controls">
+  <div><kbd>Enter</kbd></div><div>Give your swarm an order in plain English</div>
   <div><kbd>LMB</kbd> drag / click</div><div>Select groups (<kbd>Shift</kbd> adds, double-click = all on screen)</div>
   <div><kbd>RMB</kbd></div><div>Move · attack enemy · harvest rock · join friendly group</div>
   <div><kbd>Wheel</kbd> · <kbd>MMB</kbd> drag · arrows</div><div>Zoom · pan</div>
@@ -89,7 +90,11 @@ function menu(): void {
   const el = screen('menu', `
     <div class="menu-card">
       <h1>SWARMER</h1>
-      <p class="tag">Command thousands. Harvest, split, morph, and overwhelm.</p>
+      <p class="tag">Command thousands of units in plain English.</p>
+      <div class="pitch">
+        <div class="pitch-prompt"><span>›</span> split into three, harvest the closest rocks, then hunt Ember with strikers</div>
+        <p>Type an order and the swarm writes its own program, then runs it live. Mouse and hotkeys still work when you want direct control.</p>
+      </div>
       <div class="opt"><label>Difficulty</label><div class="seg" data-choice="diff"></div></div>
       <div class="opt"><label>Rival swarms</label><div class="seg" data-choice="rivals"></div></div>
       <div class="opt"><label>Map</label><div class="seg" data-choice="size"></div></div>
