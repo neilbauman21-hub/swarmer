@@ -1,4 +1,4 @@
-import { FORMATIONS, Formation, ROLES, Role, RESEARCH_TRACKS, SHIPS, TEAM_NAMES, type ResearchTrack } from '../sim/config';
+import { FORMATIONS, Formation, ROLES, Role, SHIPS, TEAM_NAMES } from '../sim/config';
 import type { World } from '../sim/world';
 import { PRESETS, designUnits } from '../sim/parts';
 
@@ -8,7 +8,7 @@ export interface SwarmState {
   units: number;
   cap: number;
   points: number;
-  research: Record<ResearchTrack, number>;
+  unlocked: string[];
   mapSize: number;
   home: { x: number; y: number };
   selected: number[];
@@ -40,7 +40,7 @@ export type Command =
   | { op: 'dash'; ids: Ids; x: number; y: number }
   | { op: 'shield'; ids: Ids }
   | { op: 'nova'; ids: Ids }
-  | { op: 'upgrade'; track: string }
+  | { op: 'unlock'; type: string }
   | { op: 'build'; id: number; design: string };
 
 const ROLE_NAMES = ROLES.map((r) => r.name.toLowerCase());
@@ -69,7 +69,7 @@ export function snapshot(w: World, team: number, selected: Iterable<number>): Sw
     }
   }
   return {
-    time: Math.round(w.time * 10) / 10, units: t.units, cap: t.cap, points: t.points, research: { ...t.levels },
+    time: Math.round(w.time * 10) / 10, units: t.units, cap: t.cap, points: t.points, unlocked: [...t.unlocked],
     mapSize: w.size, home: { x: t.homeX, y: t.homeY },
     selected: [...selected].filter((id) => w.groups[id]?.alive && w.groups[id].team === team),
     groups, enemies,
@@ -170,11 +170,9 @@ export function applyCommands(w: World, team: number, cmds: unknown[], limit = 8
         if (id !== undefined && d && w.cmdBuild(id, d) >= 0) applied++;
         break;
       }
-      case 'upgrade': {
-        const track = RESEARCH_TRACKS.find((r) => r.id === c.track);
-        if (track && w.buyResearch(team, track.id)) applied++;
+      case 'unlock':
+        if (w.buyPart(team, String(c.type).toLowerCase())) applied++;
         break;
-      }
     }
   }
   return applied;

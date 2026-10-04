@@ -5,7 +5,7 @@ import {
   ResearchTrack, TEAM_COLORS, UNIT_SPACING,
 } from './config';
 import { Grid } from './grid';
-import { CellStat, Design, MIN_CELLS, PART_BY_ID, cellStats, constructSpeed, designUnits, largestComponent } from './parts';
+import { CellStat, Design, MIN_CELLS, PART_BY_ID, ROLE_UNLOCKS, ROLE_UNLOCK_BY_ROLE, cellStats, constructSpeed, designUnits, largestComponent } from './parts';
 import { Rng } from './rng';
 import { updateShips, updateWaves } from './ships';
 import { updateAI } from './ai';
@@ -49,6 +49,8 @@ export interface Group {
   cy: number;
   radius: number;
   spread: number;
+  vx: number; // mean unit velocity, used for flock alignment
+  vy: number;
   enemyNear: boolean;
   combatT: number; // seconds since last shot fired or damage taken (0 = now)
   progress: number; // replicate / harvest accumulator
@@ -169,6 +171,8 @@ export class World {
   readonly ugroup = new Int32Array(MAX_UNITS);
   readonly utgt = new Int32Array(MAX_UNITS).fill(-1);
   readonly uslot = new Int16Array(MAX_UNITS).fill(-1); // construct cell index, -1 = free swarm unit
+  readonly upx = new Float32Array(MAX_UNITS); // positions at the previous tick, for smooth render interpolation
+  readonly upy = new Float32Array(MAX_UNITS);
   private readonly sepX = new Float32Array(MAX_UNITS);
   private readonly sepY = new Float32Array(MAX_UNITS);
   hi = 0; // high-water mark of unit slots in use
@@ -214,7 +218,9 @@ export class World {
       this.teams.push({
         id: t, alive: true, ai: t !== 0, color: TEAM_COLORS[t], units: 0,
         cap: t === 0 ? PLAYER_CAP : diff.aiCap, points: 0, pointsEarned: 0, progress: 0,
-        levels: { speed: 0, damage: 0, hull: 0, replication: 0 }, unlocked: new Set(['drone']), designs: [],
+        levels: { speed: 0, damage: 0, hull: 0, replication: 0 },
+        // Rivals know every swarm type; the player researches them.
+        unlocked: new Set(t === 0 ? ['drone'] : ['drone', ...ROLE_UNLOCKS.map((r) => r.id)]), designs: [],
         homeX: hx, homeY: hy, kills: 0, lost: 0, peak: 0, spawned: 0,
       });
       const g = this.createGroup(t, hx, hy);
@@ -257,7 +263,7 @@ export class World {
       order: { type: 'idle', x, y, group: -1, ship: -1, rock: -1 },
       formation: Formation.Swarm, role: Role.Drone, morphTo: Role.Drone, morphT: 0,
       energy: ENERGY_MAX * 0.5, cdDash: 0, cdShield: 0, cdNova: 0, dashT: 0, dashX: 0, dashY: 0,
-      shieldT: 0, novaT: 0, cruise: 0, count: 0, cx: x, cy: y, radius: 10, spread: 0, enemyNear: false, combatT: 99,
+      shieldT: 0, novaT: 0, cruise: 0, count: 0, cx: x, cy: y, radius: 10, spread: 0, vx: 0, vy: 0, enemyNear: false, combatT: 99,
       progress: 0, harvesting: false, born: this.time, recentLoss: 0, path: [], peak: 0, design: null, cells: null, slotUnit: null, cSpeed: 0, integrityDirty: false,
     };
     this.groups.push(g);
@@ -273,6 +279,8 @@ export class World {
     else return -1;
     this.ux[i] = x;
     this.uy[i] = y;
+    this.upx[i] = x;
+    this.upy[i] = y;
     const a = this.rng.next() * Math.PI * 2;
     this.uvx[i] = Math.cos(a) * 60;
     this.uvy[i] = Math.sin(a) * 60;
@@ -520,6 +528,14 @@ export class World {
   /** Research a particle part. */
   buyPart(team: number, partId: string): boolean {
     const t = this.teams[team];
+    const roleUnlock = ROLE_UNLOCKS.find((r) => r.id === partId);
+    if (roleUnlock) {
+      if (t.unlocked.has(partId) || t.points < roleUnlock.cost) return false;
+      t.points -= roleUnlock.cost;
+      t.unlocked.add(partId);
+      this.events.push({ t: 'research', x: t.homeX, y: t.homeY, team, msg: `${roleUnlock.name} unlocked` });
+      return true;
+    }
     const part = PART_BY_ID.get(partId);
     if (!part || t.unlocked.has(partId) || t.points < part.cost) return false;
     if (!part.requires.every((r) => t.unlocked.has(r))) return false;
@@ -620,6 +636,11 @@ export class World {
     for (const id of ids) {
       const g = this.groups[id];
       if (!g?.alive || g.cells || (g.role === role && g.morphT <= 0) || (g.morphTo === role && g.morphT > 0)) continue;
+      const gate = ROLE_UNLOCK_BY_ROLE.get(role);
+      if (gate && !this.teams[g.team].unlocked.has(gate.id)) {
+        this.events.push({ t: 'fail', x: g.cx, y: g.cy, team: g.team, msg: `Research ${gate.name} first (Y)` });
+        continue;
+      }
       g.morphTo = role;
       g.morphT = MORPH_TIME;
       this.events.push({ t: 'morph', x: g.cx, y: g.cy, team: g.team, r: g.radius });
@@ -729,6 +750,8 @@ export class World {
       g.count = 0;
       g.cx = 0;
       g.cy = 0;
+      g.vx = 0;
+      g.vy = 0;
       g.slotUnit?.fill(-1);
     }
     for (const t of this.teams) t.units = 0;
@@ -739,6 +762,8 @@ export class World {
       if (g.slotUnit && this.uslot[i] >= 0) g.slotUnit[this.uslot[i]] = i;
       g.cx += this.ux[i];
       g.cy += this.uy[i];
+      g.vx += this.uvx[i];
+      g.vy += this.uvy[i];
       this.teams[this.uteam[i]].units++;
     }
     for (const g of gs) {
@@ -749,6 +774,8 @@ export class World {
       }
       g.cx /= g.count;
       g.cy /= g.count;
+      g.vx /= g.count;
+      g.vy /= g.count;
       g.spread = 0;
     }
     // Measured spread (RMS distance from centroid) so rings and hit-tests hug the real swarm.
@@ -1128,6 +1155,8 @@ export class World {
     const sep = UNIT_SPACING;
     const sep2 = sep * sep;
     const sepX = this.sepX, sepY = this.sepY;
+    this.upx.set(ux.subarray(0, this.hi));
+    this.upy.set(uy.subarray(0, this.hi));
 
     for (let i = 0; i < this.hi; i++) {
       if (!ualive[i]) continue;
@@ -1159,6 +1188,13 @@ export class World {
         const p = shapeProject(ox, oy, g.hx, g.hy, g.count, g.formation, seed);
         px = g.ax + p[0];
         py = g.ay + p[1];
+      }
+      if (!cellS && !g.harvesting) {
+        // Each particle loops on its own little orbit around its formation spot, so the swarm never sits in a lattice.
+        const ph = time * (0.7 + seed * 1.3) + seed * 50;
+        const orb = 4 + seed * 13;
+        px += Math.cos(ph) * orb;
+        py += Math.sin(ph * 1.17) * orb;
       }
       if (g.novaT > 0) {
         // Charging nova: the swarm implodes toward its centre.
@@ -1270,19 +1306,46 @@ export class World {
         }
       }
 
-      // Organic shimmer.
-      const w = time * (1.3 + seed) + seed * 40;
-      const jitter = cellS ? 2 : 14;
-      dvx += Math.cos(w) * jitter;
-      dvy += Math.sin(w * 1.3) * jitter;
+      if (cellS) {
+        // Bonded cells: tight spring, a hint of tremor.
+        const w = time * (1.3 + seed) + seed * 40;
+        dvx += Math.cos(w) * 2;
+        dvy += Math.sin(w * 1.3) * 2;
+      } else {
+        // ---- murmuration: a drifting flow field, an idle swirl and alignment with the flock.
+        const calm = g.order.type === 'idle' || g.order.type === 'replicate' || g.order.type === 'research';
+        const fa = Math.sin(x * 0.011 + time * 0.35 + g.id) + Math.cos(y * 0.013 - time * 0.29) + Math.sin((x - y) * 0.006 + time * 0.17 + seed * 2);
+        const flow = (calm ? 52 : 26) * (0.6 + seed * 0.7);
+        dvx += Math.cos(fa * 2.1) * flow;
+        dvy += Math.sin(fa * 2.1) * flow;
+        if (calm && !g.enemyNear && !g.harvesting && g.formation === Formation.Swarm) {
+          // Slow rotation around the swarm's heart; alternate direction per swarm.
+          const rx = x - g.cx, ry = y - g.cy;
+          const rd = Math.sqrt(rx * rx + ry * ry) || 1;
+          const spin = (g.id & 1 ? 1 : -1) * (14 + 22 * seed) * Math.min(1, rd / (g.radius * 0.5 + 1));
+          dvx += (-ry / rd) * spin;
+          dvy += (rx / rd) * spin;
+        }
+        dvx += (g.vx - uvx[i]) * 0.25;
+        dvy += (g.vy - uvy[i]) * 0.25;
+      }
 
-      // Clamp desired speed then steer.
+      // Clamp desired speed, then steer with a limited turn/acceleration budget so paths curve.
       const dl = Math.sqrt(dvx * dvx + dvy * dvy);
       const lim = maxSp * 1.15;
       if (dl > lim) { dvx *= lim / dl; dvy *= lim / dl; }
-      const acc = g.dashT > 0 ? 10 : cellS ? 9 : 6.5;
-      uvx[i] += (dvx - uvx[i]) * Math.min(1, acc * DT);
-      uvy[i] += (dvy - uvy[i]) * Math.min(1, acc * DT);
+      if (cellS) {
+        const acc = g.dashT > 0 ? 10 : 9;
+        uvx[i] += (dvx - uvx[i]) * Math.min(1, acc * DT);
+        uvy[i] += (dvy - uvy[i]) * Math.min(1, acc * DT);
+      } else {
+        let sx2 = dvx - uvx[i], sy2 = dvy - uvy[i];
+        const sl = Math.sqrt(sx2 * sx2 + sy2 * sy2);
+        const maxAcc = (g.dashT > 0 ? 3200 : 700 + maxSp * 3.2) * DT;
+        if (sl > maxAcc) { sx2 *= maxAcc / sl; sy2 *= maxAcc / sl; }
+        uvx[i] += sx2;
+        uvy[i] += sy2;
+      }
       let nx = x + uvx[i] * DT, ny = y + uvy[i] * DT;
       if (nx < 5) { nx = 5; uvx[i] = Math.abs(uvx[i]); }
       if (ny < 5) { ny = 5; uvy[i] = Math.abs(uvy[i]); }

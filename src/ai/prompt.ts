@@ -11,7 +11,7 @@ Plain synchronous JavaScript only: no async, no imports, no network, no DOM, no 
 Do not re-issue the same order every tick: units restart their approach each time. Remember issued orders in memory, or only re-order idle groups (g.order === 'idle').
 
 STATE (coordinates in world units; y grows downward; map is state.mapSize square)
-state.time, state.units, state.cap, state.points (unspent research points), state.research {speed,damage,hull,replication}
+state.time, state.units, state.cap, state.points (unspent research points), state.unlocked (particle types researched, e.g. 'striker', 'plate')
 state.home {x,y}; state.selected: ids of groups the player had selected when giving the order
 state.groups: my swarms [{id,count,x,y,radius,role,formation,order,energy,inCombat,harvesting,ready:{dash,shield,nova}}]
   role: 'drone'|'striker'|'tank'|'harvester'|'artillery'; formation: 'swarm'|'wedge'|'ring'|'line'
@@ -26,9 +26,9 @@ api.move(ids,x,y)  api.path(ids,[[x,y],...])  api.hold(ids)
 api.attack(ids, enemyGroup)  api.attackShip(ids, ship)  api.harvest(ids, rock)
 api.split(group, dx, dy) splits a group in half; the half toward (dx,dy) becomes a NEW group that appears in state.groups next tick
 api.merge(ids)  api.replicate(ids) (group needs 20+ units)  api.research(ids)
-api.formation(ids, name)  api.morph(ids, role) (takes 2 seconds)
+api.formation(ids, name)  api.morph(ids, role) (takes 2 seconds; the role must be in state.unlocked, drone always is)
 api.dash(ids,x,y) (30 energy)  api.shield(ids) (40 energy)  api.nova(ids) (60 energy, sacrifices 15% of the group in a big blast)
-api.upgrade('speed'|'damage'|'hull'|'replication') spends a research point
+api.unlock(type) spends research points on a particle type: swarm roles 'striker','harvester' (1 pt), 'tank','artillery' (2 pts); construct parts 'plate','spike','thruster' (1), 'mender','cannon' (2), 'lance','shield','reactor' (3)
 api.build(group, designName) turns part of a swarm group into a construct (needs design.units units and buildable === true); it appears as a new group next tick. Constructs can move, attack, dash and shield, but not replicate, research, split or change formation. Merging a swarm into a construct repairs it.
 api.log(text) shows a short message to the player; api.done() ends the program.
 Helpers available as globals: dist(a,b), nearest(from, list), byDistance(from, list), centroid(groups).

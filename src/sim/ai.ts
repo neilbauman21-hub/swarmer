@@ -1,4 +1,4 @@
-import { DIFFICULTY, Formation, REPLICATE_MIN, ResearchTrack, Role, SHIPS } from './config';
+import { DIFFICULTY, Formation, REPLICATE_MIN, Role, SHIPS } from './config';
 import type { Group, Team, World } from './world';
 
 interface AIState {
@@ -8,7 +8,6 @@ interface AIState {
 }
 
 const states = new WeakMap<World, Map<number, AIState>>();
-const TRACKS: ResearchTrack[] = ['damage', 'replication', 'hull', 'speed', 'damage', 'hull'];
 
 interface Threat {
   x: number;
@@ -40,14 +39,6 @@ export function updateAI(w: World): void {
 }
 
 function think(w: World, team: Team, st: AIState): void {
-  while (team.points > 0) {
-    const track = TRACKS[st.researchIdx % TRACKS.length];
-    st.researchIdx++;
-    if (!w.buyResearch(team.id, track)) {
-      // Track maxed: try any other.
-      if (!(['damage', 'hull', 'replication', 'speed'] as ResearchTrack[]).some((t) => w.buyResearch(team.id, t))) break;
-    }
-  }
   const mine = w.groupsOf(team.id);
   if (!mine.length) return;
   const researching = mine.filter((g) => g.order.type === 'research').length;

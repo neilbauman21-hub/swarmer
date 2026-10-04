@@ -1,6 +1,7 @@
-import { COUNTER, DASH, DT, TEAM_NAMES, Difficulty, FORMATIONS, Formation, NOVA, ROLES, Role, SHIELD, SHIPS, TEAM_COLORS } from './sim/config';
+import { COUNTER, DASH, DT, MAX_UNITS, TEAM_NAMES, Difficulty, FORMATIONS, Formation, NOVA, ROLES, Role, SHIELD, SHIPS, TEAM_COLORS } from './sim/config';
 import { World, type GameEvent } from './sim/world';
 import { Fx } from './render/fx';
+import { Trails } from './render/trails';
 import { Renderer, SpriteBatch } from './render/renderer';
 import { buildScene } from './render/scene';
 import type { Audio } from './ui/audio';
@@ -31,6 +32,8 @@ export class Game {
   readonly world: World;
   readonly renderer: Renderer;
   readonly fx = new Fx();
+  private trails = new Trails(MAX_UNITS);
+  private frameDt = 0;
   readonly hud: Hud | null;
   readonly selected = new Set<number>();
   readonly cam: Camera;
@@ -109,6 +112,7 @@ export class Game {
     if (this.destroyed) return;
     this.raf = requestAnimationFrame(this.frame);
     const dt = Math.min(0.1, (now - this.last) / 1000);
+    this.frameDt = dt;
     this.last = now;
     this.resize();
     const events: GameEvent[] = [];
@@ -309,9 +313,10 @@ export class Game {
     const [sx, sy] = this.shakeOffset();
     const zoom = this.cam.zoom * this.dpr;
     const bounds = this.viewBounds();
+    if (!this.paused) this.trails.sample(w, this.frameDt, this.acc / DT);
     buildScene(w, this.fx, bounds, {
       selected: this.selected, hoverGroup: this.hoverGroup, hoverRock: this.hoverRock, hoverShip: this.hoverShip,
-      alpha: this.paused ? 0 : this.acc / DT, time: this.time, zoom,
+      alpha: this.paused ? 1 : this.acc / DT, time: this.time, zoom, trails: this.trails,
     }, this.under, this.solid, this.glow);
     this.renderer.render({
       cx: this.cam.x + sx, cy: this.cam.y + sy, zoom, time: this.time, size: w.size,
@@ -329,49 +334,6 @@ export class Game {
     ctx.font = '600 11px "Saira Condensed", "Arial Narrow", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-
-    // Order lines for selected groups.
-    ctx.setLineDash([4, 6]);
-    ctx.lineDashOffset = -this.time * 20;
-    for (const id of this.selected) {
-      const g = w.groups[id];
-      if (!g?.alive) continue;
-      const tgt = this.orderTarget(id);
-      if (!tgt) continue;
-      const [x1, y1] = this.worldToScreen(g.cx, g.cy);
-      const [x2, y2] = this.worldToScreen(tgt[0], tgt[1]);
-      ctx.strokeStyle = tgt[2];
-      ctx.globalAlpha = 0.45;
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-    ctx.globalAlpha = 1;
-
-    // Queued waypoints for selected groups.
-    ctx.setLineDash([2, 7]);
-    for (const id of this.selected) {
-      const g = w.groups[id];
-      if (!g?.alive || !g.path.length || g.order.type !== 'move') continue;
-      ctx.strokeStyle = '#7fe3ff';
-      ctx.globalAlpha = 0.35;
-      ctx.beginPath();
-      ctx.moveTo(...this.worldToScreen(g.order.x, g.order.y));
-      for (let k = 0; k < g.path.length; k += 2) ctx.lineTo(...this.worldToScreen(g.path[k], g.path[k + 1]));
-      ctx.stroke();
-      const [ex, ey] = this.worldToScreen(g.path[g.path.length - 2], g.path[g.path.length - 1]);
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 0.6;
-      ctx.beginPath();
-      ctx.arc(ex, ey, 5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([2, 7]);
-    }
-    ctx.setLineDash([]);
-    ctx.globalAlpha = 1;
 
     // Route being drawn with the right mouse button.
     if (this.drawn && this.drawn.length >= 4) {
@@ -391,7 +353,8 @@ export class Game {
     }
 
     // Group labels: selected + hovered + large on-screen enemy groups when zoomed out.
-    const labelled = new Set<number>(this.selected);
+    // Only the swarm under the cursor gets a label; everything else stays clean.
+    const labelled = new Set<number>();
     if (this.hoverGroup >= 0) labelled.add(this.hoverGroup);
     for (const id of labelled) {
       const g = w.groups[id];
@@ -414,20 +377,13 @@ export class Game {
       } else {
         label += ` · ${ROLES[g.role].name}`;
       }
-      const tw = ctx.measureText(label).width + 14;
-      ctx.fillStyle = 'rgba(6,8,11,0.82)';
-      roundRect(ctx, x - tw / 2, y - 9, tw, 18, 2);
-      ctx.fill();
+      ctx.shadowColor = 'rgba(0,0,0,0.9)';
+      ctx.shadowBlur = 6;
       ctx.fillStyle = css;
-      ctx.fillText(label, x, y + 0.5);
-      if (own) {
-        // Energy bar.
-        const bw = Math.max(36, tw - 18);
-        ctx.fillStyle = 'rgba(255,255,255,0.12)';
-        ctx.fillRect(x - bw / 2, y + 11, bw, 3);
-        ctx.fillStyle = '#7fe3ff';
-        ctx.fillRect(x - bw / 2, y + 11, (bw * g.energy) / 100, 3);
-      }
+      ctx.globalAlpha = 0.85;
+      ctx.fillText(label.toUpperCase(), x, y + 0.5);
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
     }
 
     // Ship health bars.
@@ -474,13 +430,13 @@ export class Game {
     // Command pings.
     for (const p of this.pings) {
       const [x, y] = this.worldToScreen(p.x, p.y);
-      const f = 1 - p.t / 0.5;
-      ctx.strokeStyle = p.color;
-      ctx.globalAlpha = 1 - f;
-      ctx.lineWidth = 2;
+      // Tiny fading tick where the order landed.
+      const f = p.t / 0.5;
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = (1 - f) * 0.8;
       ctx.beginPath();
-      ctx.arc(x, y, 6 + f * 18, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.arc(x, y, 2.5 + f * 3, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.globalAlpha = 1;
 
@@ -541,25 +497,6 @@ export class Game {
     this.pings = this.pings.filter((p) => p.t < 0.5);
     for (const a of this.alerts) a.t -= dt;
     this.alerts = this.alerts.filter((a) => a.t > 0);
-  }
-
-  private orderTarget(id: number): [number, number, string] | null {
-    const g = this.world.groups[id];
-    const o = g.order;
-    if (o.type === 'move') return [o.x, o.y, '#7fe3ff'];
-    if (o.type === 'harvest') {
-      const r = this.world.rocks[o.rock];
-      return r?.alive && !g.harvesting ? [r.x, r.y, '#e8c98f'] : null;
-    }
-    if (o.type === 'attack') {
-      if (o.group >= 0) {
-        const t = this.world.groups[o.group];
-        return t?.alive ? [t.cx, t.cy, '#ff7b6b'] : null;
-      }
-      const s = this.world.ships[o.ship];
-      return s?.alive ? [s.x, s.y, '#ff7b6b'] : null;
-    }
-    return null;
   }
 
   /** Damage advantage of the current selection against a role (>1 = we hit harder than they do). */
@@ -721,8 +658,9 @@ export class Game {
       }
       this.audio.ui('select');
       this.hud?.notify('select');
-    } else if (!shift) {
-      this.selected.clear();
+    } else if (this.selectedIds().length) {
+      // Click to move (or attack / harvest what's under the cursor), nohope-style.
+      this.rightClick(shift);
     }
   }
 

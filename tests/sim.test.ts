@@ -88,6 +88,11 @@ describe('world', () => {
     expect(w.cmdShield([g.id])).toBe(false); // cooldown
     w.cmdMorph([g.id], Role.Tank);
     run(w, 3);
+    expect(g.role).toBe(Role.Drone); // tank isn't researched yet
+    w.teams[0].points = 2;
+    expect(w.buyPart(0, 'tank')).toBe(true);
+    w.cmdMorph([g.id], Role.Tank);
+    run(w, 3);
     expect(g.role).toBe(Role.Tank);
     w.cmdFormation([g.id], Formation.Ring);
     run(w, 1);

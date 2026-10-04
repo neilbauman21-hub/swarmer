@@ -40,15 +40,11 @@ void main(){
   vec2 sp=(u_cam*0.3+vec2(px.x,-px.y)/max(u_zoom,0.1)*0.6);
   col+=stars(sp/38.0,0.10,0.10)*0.6;
   col+=stars((u_cam*0.6+vec2(px.x,-px.y)/max(u_zoom,0.1)*0.85)/70.0+31.0,0.06,0.07)*0.9;
-  // Subtle world grid that fades when zoomed out.
-  vec2 g=abs(fract(world/400.0)-0.5);
-  float line=smoothstep(0.5-1.2/(u_zoom*400.0),0.5,max(g.x,g.y));
-  col+=vec3(0.03,0.05,0.08)*line*clamp(u_zoom*1.5,0.0,1.0);
   // Map boundary.
   vec2 e=min(world,vec2(u_size)-world);
   float edge=min(e.x,e.y);
-  col+=vec3(0.2,0.35,0.6)*exp(-abs(edge)*u_zoom*0.25)*0.5;
-  if(edge<0.0) col*=0.35;
+  // The map edge is just a gentle darkening, no hard line.
+  col*=mix(0.25,1.0,smoothstep(-300.0,200.0,edge));
   o=vec4(col,1.0);
 }`;
 
@@ -222,6 +218,7 @@ void main(){
   vec3 c=texture(u_tex,v_uv+u_texel*vec2(-0.5,-0.5)).rgb+texture(u_tex,v_uv+u_texel*vec2(0.5,-0.5)).rgb
         +texture(u_tex,v_uv+u_texel*vec2(-0.5,0.5)).rgb+texture(u_tex,v_uv+u_texel*vec2(0.5,0.5)).rgb;
   c*=0.25;
+  c=min(c,vec3(2.5)); // dense piles of additive particles must not flood the whole screen with bloom
   float b=max(c.r,max(c.g,c.b));
   float k=smoothstep(0.18,0.7,b);
   o=vec4(c*k,1.0);

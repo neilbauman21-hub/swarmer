@@ -39,6 +39,16 @@ export const PARTS: PartDef[] = [
 ];
 
 export const PART_BY_ID = new Map(PARTS.map((p) => [p.id, p]));
+
+/** Swarm particle types: unlocking one lets whole swarms morph into it (keys 2-5). */
+export interface RoleUnlock { id: string; role: Role; name: string; cost: number; blurb: string; tint: [number, number, number] }
+export const ROLE_UNLOCKS: RoleUnlock[] = [
+  { id: 'striker', role: Role.Striker, name: 'Striker', cost: 1, blurb: 'Fast melee lancers. Shred artillery and harvesters.', tint: [1, 0.55, 0.5] },
+  { id: 'harvester', role: Role.Harvester, name: 'Harvester', cost: 1, blurb: 'Weak fighters that harvest and replicate far faster.', tint: [0.5, 1, 0.6] },
+  { id: 'tank', role: Role.Tank, name: 'Tank', cost: 2, blurb: 'Armored and slow. Beats strikers.', tint: [0.75, 0.8, 0.95] },
+  { id: 'artillery', role: Role.Artillery, name: 'Artillery', cost: 2, blurb: 'Long-range splash shells. Beats tanks.', tint: [1, 0.9, 0.55] },
+];
+export const ROLE_UNLOCK_BY_ROLE = new Map(ROLE_UNLOCKS.map((r) => [r.role, r]));
 export const CELL_SPACING = 11; // world units between grid cells
 export const GRID_LIMIT = 7; // cells live in [-7, 7] on both axes
 export const MAX_CELLS = 32;

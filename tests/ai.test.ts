@@ -39,7 +39,7 @@ function runProgram(code: string, w: World, seconds: number): { logs: string[]; 
       dash: (g: any, x: number, y: number) => cmds.push({ op: 'dash', ids: ids(g), x, y }),
       shield: (g: any) => cmds.push({ op: 'shield', ids: ids(g) }),
       nova: (g: any) => cmds.push({ op: 'nova', ids: ids(g) }),
-      upgrade: (track: string) => cmds.push({ op: 'upgrade', track }),
+      unlock: (type: string) => cmds.push({ op: 'unlock', type }),
       build: (g: any, design: string) => cmds.push({ op: 'build', id: id(g), design }),
       log: (m: string) => logs.push(m),
       done: () => { done = true; },

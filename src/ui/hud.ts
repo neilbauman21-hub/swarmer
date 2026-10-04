@@ -1,7 +1,7 @@
-import { MAX_RESEARCH_LEVEL, RESEARCH_TRACKS, SHIPS, TEAM_COLORS, TEAM_NAMES } from '../sim/config';
+import { SHIPS, TEAM_COLORS, TEAM_NAMES } from '../sim/config';
 import type { Game } from '../game';
 import { PromptDock } from './prompt';
-import { PARTS, PART_BY_ID, type PartDef } from '../sim/parts';
+import { PARTS, PART_BY_ID, ROLE_UNLOCKS, type PartDef } from '../sim/parts';
 
 /**
  * Minimal HUD: a slim status line, rival list, minimap, and the prompt dock as the main control.
@@ -49,7 +49,7 @@ export class Hud {
   }
 
   private buildResearch(): void {
-    // Tiers come from the requirement depth, so the tree lays itself out.
+    // Research only unlocks particle types: swarm roles first, then construct parts by requirement depth.
     const depth = (id: string): number => {
       const p = PART_BY_ID.get(id)!;
       return p.requires.length ? 1 + Math.max(...p.requires.map(depth)) : 0;
@@ -59,18 +59,21 @@ export class Hud {
       if (p.id === 'drone') continue;
       (tiers[depth(p.id)] ??= []).push(p);
     }
-    let html = '<div class="panel-title">Research &amp; development <span class="pts"></span></div><div class="progress"><div></div></div>';
-    html += '<div class="tree-head">Particles <small>unlock parts, then describe a construct in the Fabrication tab</small></div><div class="tree">';
+    const node = (id: string, name: string, blurb: string, cost: number, tint: number[], req = '') =>
+      `<button class="node" data-part="${id}" title="${req}${blurb}"><i style="background:rgb(${tint.map((v) => Math.round(v * 255)).join(',')})"></i><b>${name}</b><small>${blurb}</small><span class="cost">${cost} pt${cost > 1 ? 's' : ''}</span></button>`;
+    let html = '<div class="panel-title">Research <span class="pts"></span></div><div class="progress"><div></div></div>';
+    html += '<div class="tree-head">Swarm types <small>whole swarms morph into these (keys 2–5)</small></div><div class="tier">';
+    for (const r of ROLE_UNLOCKS) html += node(r.id, r.name, r.blurb, r.cost, r.tint);
+    html += '</div><div class="tree-head">Construct parts <small>describe a construct in the Fabrication tab</small></div><div class="tree">';
     tiers.forEach((tier, i) => {
-      html += `<div class="tier"><div class="tier-label">Tier ${i + 1}</div>`;
+      html += `<div class="tier"><div class="tier-label">TIER ${i + 1}</div>`;
       for (const p of tier) {
-        const c = p.tint.map((v) => Math.round(v * 255)).join(',');
         const req = p.requires.length ? `Needs ${p.requires.map((r) => PART_BY_ID.get(r)!.name).join(' + ')}. ` : '';
-        html += `<button class="node" data-part="${p.id}" title="${req}${p.blurb}"><i style="background:rgb(${c})"></i><b>${p.name}</b><small>${p.blurb}</small><span class="cost">${p.cost} pt${p.cost > 1 ? 's' : ''}</span></button>`;
+        html += node(p.id, p.name, p.blurb, p.cost, p.tint, req);
       }
       html += '</div>';
     });
-    html += '</div><div class="tree-head">Upgrades</div>';
+    html += '</div><div class="hint">Earn points by pressing <kbd>T</kbd> on a swarm. <kbd>Y</kbd> closes this panel.</div>';
     this.research.innerHTML = html;
     this.research.querySelectorAll<HTMLButtonElement>('.node').forEach((b) =>
       b.addEventListener('click', () => {
@@ -80,22 +83,6 @@ export class Hud {
           this.dock.refreshDesigns();
         } else this.game.audio.ui('error');
       }));
-    for (const t of RESEARCH_TRACKS) {
-      const row = div('track');
-      row.dataset.track = t.id;
-      row.innerHTML = `<div class="track-name">${t.name}<small>${t.per} per level</small></div><div class="pips">${'<i></i>'.repeat(MAX_RESEARCH_LEVEL)}</div>`;
-      const b = button('buy', 'Upgrade', () => {
-        if (this.game.world.buyResearch(0, t.id)) {
-          this.game.audio.ui('order');
-          this.refreshResearch();
-        } else this.game.audio.ui('error');
-      });
-      row.append(b);
-      this.research.append(row);
-    }
-    const hint = div('hint');
-    hint.innerHTML = 'Earn points by pressing <kbd>T</kbd> on a group. <kbd>Y</kbd> closes this panel.';
-    this.research.append(hint);
   }
 
   private refreshResearch(): void {
@@ -103,22 +90,17 @@ export class Hud {
     this.research.querySelector('.pts')!.textContent = `${team.points} point${team.points === 1 ? '' : 's'}`;
     (this.research.querySelector('.progress > div') as HTMLElement).style.width = `${(100 * team.progress) / this.game.world.researchCost(0)}%`;
     this.research.querySelectorAll<HTMLButtonElement>('.node').forEach((b) => {
-      const p = PART_BY_ID.get(b.dataset.part!)!;
-      const owned = team.unlocked.has(p.id);
-      const ready = !owned && p.requires.every((r) => team.unlocked.has(r));
+      const id = b.dataset.part!;
+      const part = PART_BY_ID.get(id);
+      const role = ROLE_UNLOCKS.find((r) => r.id === id);
+      const cost = part?.cost ?? role?.cost ?? 1;
+      const owned = team.unlocked.has(id);
+      const ready = !owned && (part ? part.requires.every((r) => team.unlocked.has(r)) : true);
       b.classList.toggle('owned', owned);
-      b.classList.toggle('ready', ready && team.points >= p.cost);
+      b.classList.toggle('ready', ready && team.points >= cost);
       b.classList.toggle('locked', !owned && !ready);
-      b.disabled = owned || !ready || team.points < p.cost;
+      b.disabled = owned || !ready || team.points < cost;
     });
-    for (const row of this.research.querySelectorAll<HTMLElement>('.track')) {
-      const id = row.dataset.track as keyof typeof team.levels;
-      const lvl = team.levels[id];
-      row.querySelectorAll('i').forEach((p, i) => p.classList.toggle('on', i < lvl));
-      const b = row.querySelector('button')!;
-      b.disabled = team.points < 1 || lvl >= MAX_RESEARCH_LEVEL;
-      b.textContent = lvl >= MAX_RESEARCH_LEVEL ? 'Max' : 'Upgrade';
-    }
   }
 
   banner(text: string, color: string): void {
@@ -241,15 +223,4 @@ function div(cls: string): HTMLDivElement {
   const d = document.createElement('div');
   d.className = cls;
   return d;
-}
-
-function button(cls: string, html: string, fn: () => void): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.className = cls;
-  b.innerHTML = html;
-  b.addEventListener('click', (e) => {
-    e.stopPropagation();
-    fn();
-  });
-  return b;
 }

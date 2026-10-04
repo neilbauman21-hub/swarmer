@@ -19,19 +19,19 @@ try {
 const CONTROLS = `
 <dl class="controls">
   <dt><kbd>Enter</kbd></dt><dd>Give an order in plain language</dd>
-  <dt><kbd>LMB</kbd></dt><dd>Select · drag a box · <kbd>Shift</kbd> adds · double-click selects all on screen</dd>
-  <dt><kbd>RMB</kbd></dt><dd>Move · attack · harvest · join a friendly swarm · drag to draw a route</dd>
+  <dt><kbd>LMB</kbd></dt><dd>Click to move, attack or harvest · click your swarm to select it · drag a box · double-click selects all on screen</dd>
+  <dt><kbd>RMB</kbd></dt><dd>Same as a click · drag to draw a route · <kbd>Shift</kbd> queues waypoints</dd>
   <dt><kbd>Wheel</kbd> <kbd>MMB</kbd></dt><dd>Zoom · pan (arrow keys and screen edges pan too)</dd>
   <dt><kbd>S</kbd> <kbd>G</kbd> <kbd>H</kbd></dt><dd>Split toward cursor · merge · hold</dd>
   <dt><kbd>B</kbd> <kbd>T</kbd> <kbd>Y</kbd></dt><dd>Replicate · research · research tree</dd>
   <dt><kbd>Q</kbd> <kbd>E</kbd> <kbd>R</kbd></dt><dd>Dash · shield · nova</dd>
   <dt><kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> <kbd>V</kbd></dt><dd>Swarm · wedge · ring · line formation</dd>
-  <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Morph: drone · striker · tank · harvester · artillery</dd>
+  <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Morph: drone · striker · tank · harvester · artillery (research them first)</dd>
   <dt><kbd>Tab</kbd> <kbd>Space</kbd></dt><dd>Cycle groups · center camera</dd>
   <dt><kbd>P</kbd> <kbd>Esc</kbd></dt><dd>Pause</dd>
 </dl>`;
 
-const BUILD = 'BUILD 0.6';
+const BUILD = 'BUILD 0.7';
 
 const INTERCEPTS = [
   { order: 'split into three and harvest the closest rocks', code: ['for (const g of state.groups)', '  api.split(g, rock.x - g.x, rock.y - g.y);', '  api.harvest(half, nearest(half, state.rocks));'] },
@@ -159,9 +159,9 @@ function menu(): void {
     <aside class="panel side" data-panel="briefing" hidden>
       <div class="panel-h">Briefing</div>
       <ol class="brief">
-        <li><b>Grow.</b> Right-click asteroids to harvest them into new units. Press <kbd>B</kbd> to replicate in place.</li>
+        <li><b>Move.</b> Your swarm starts selected: click anywhere to send it, click an asteroid to harvest it into new units. <kbd>B</kbd> replicates in place.</li>
         <li><b>Talk.</b> Press <kbd>Enter</kbd> and give an order in plain language. The swarm writes a program for it; <em>Show code</em> reveals what it wrote.</li>
-        <li><b>Research.</b> <kbd>T</kbd> earns points; <kbd>Y</kbd> opens the tree. Unlock armor, cannons, menders and more.</li>
+        <li><b>Research.</b> <kbd>T</kbd> earns points; <kbd>Y</kbd> opens the tree. Research only unlocks new particle types: strikers, tanks, artillery, armor plates, cannons, menders and more.</li>
         <li><b>Fabricate.</b> In the Fabrication tab, describe a construct like a tank. It is built from your own units and crumbles as it takes hits.</li>
         <li><b>Survive.</b> Raider fleets hunt every swarm. Wipe out the rival swarms to secure the sector.</li>
       </ol>

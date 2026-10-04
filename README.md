@@ -4,7 +4,7 @@ A real-time swarm strategy game for the browser, inspired by [nohope.io](https:/
 
 **Talk to your swarm.** Press `Enter`, type an order like *"split into three, harvest the closest rocks, then hunt Ember with strikers"*, and an LLM (Cloudflare Workers AI) writes a small JavaScript program that commands your swarm live. The code runs in a sandboxed Web Worker with no DOM or network access, gets killed if it hangs, and can only issue validated game orders. Click **Show code** to read what it wrote. nohope.io pioneered the prompt-to-code idea; Swarmer's take adds the sandbox, live code view, persistent standing orders (`memory`), and four ready-made programs that work offline.
 
-**Design constructs.** Research particle parts in the tree (`Y`): Armor Plate, Spike, Thruster, Mender, Cannon, Lance, Shield Node, Reactor. Then open the dock's **Design a construct** tab and describe what you want ("a tank: armored front, two cannons, a mender, thrusters at the back"). The LLM lays the parts out on a grid and can trade stats per cell (2x HP for 1/2 damage, and so on). Select a swarm and press **Build**: units fly into their slots and bond into a soft body that turns with inertia, and each cell fights with its own stats. Cells that get cut off from the main body break away as loose particles, and merging a swarm into a construct repairs it. Swarm programs can build constructs too (`api.build`). Reassembly (block ships under a point budget) is the closest prior art; building them out of the swarm's own particles is Swarmer's twist.
+**Research unlocks particle types only.** The tree (`Y`) holds the swarm roles (Striker, Harvester, Tank, Artillery) and the construct parts. **Design constructs.** Research particle parts: Armor Plate, Spike, Thruster, Mender, Cannon, Lance, Shield Node, Reactor. Then open the dock's **Design a construct** tab and describe what you want ("a tank: armored front, two cannons, a mender, thrusters at the back"). The LLM lays the parts out on a grid and can trade stats per cell (2x HP for 1/2 damage, and so on). Select a swarm and press **Build**: units fly into their slots and bond into a soft body that turns with inertia, and each cell fights with its own stats. Cells that get cut off from the main body break away as loose particles, and merging a swarm into a construct repairs it. Swarm programs can build constructs too (`api.build`). Reassembly (block ships under a point budget) is the closest prior art; building them out of the swarm's own particles is Swarmer's twist.
 
 ```bash
 npm install
@@ -29,7 +29,8 @@ Requires a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari). Des
 
 | Input | Action |
 |---|---|
-| LMB click / drag | Select groups (Shift adds, double-click = all on screen) |
+| LMB click | Move / attack / harvest with the selection; click your own swarm to select it |
+| LMB drag | Box select (Shift adds, double-click = all on screen) |
 | RMB | Context command: move, attack enemy, harvest rock, or fly over and join a friendly group |
 | Wheel, MMB drag, arrows, screen edge | Zoom to cursor, pan |
 | `S` / `G` / `H` | Split toward cursor / merge / hold |

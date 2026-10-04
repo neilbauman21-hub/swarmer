@@ -32,7 +32,7 @@ export const EXAMPLES: Example[] = [
     for (const g of rest) if (g.count >= 20) api.replicate(g);
     memory.setup = true;
   }
-  while (state.points > 0) { api.upgrade('hull'); state.points--; }
+  if (state.points >= 2 && !state.unlocked.includes('tank')) api.unlock('tank');
   for (const g of all) {
     const threat = state.enemies.filter((e) => dist(e, g) < 500).reduce((s, e) => s + e.count, 0);
     if (threat > g.count * 1.2 && g.order !== 'move') {
@@ -47,7 +47,10 @@ export const EXAMPLES: Example[] = [
     prompt: 'Hunt raider ships with strikers in wedge formation',
     code: `function tick(state, api, memory) {
   const hunters = state.groups.filter((g) => g.count >= 25);
-  if (!memory.morphed) { api.morph(hunters, 'striker'); api.formation(hunters, 'wedge'); memory.morphed = true; }
+  if (!memory.morphed) {
+    if (!state.unlocked.includes('striker') && state.points >= 1) api.unlock('striker');
+    api.morph(hunters, 'striker'); api.formation(hunters, 'wedge'); memory.morphed = true;
+  }
   if (!state.ships.length) { if (!memory.said) { api.log('No raiders on the map right now'); memory.said = true; } return; }
   for (const g of hunters) {
     const ship = nearest(g, state.ships);
