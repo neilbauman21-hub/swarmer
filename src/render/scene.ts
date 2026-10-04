@@ -66,6 +66,24 @@ export function buildScene(w: World, fx: Fx, view: Bounds, s: SceneState, under:
     }
   }
 
+  // ---- construct bonds: faint struts between touching cells make each construct read as one body
+  for (const g of w.groups) {
+    if (!g.alive || !g.cells || !vis(g.cx, g.cy, g.radius + 40)) continue;
+    const c = teamColor(g.team);
+    const slots = g.slotUnit!;
+    for (let k = 0; k < g.cells.length; k++) {
+      const a = slots[k];
+      if (a < 0) continue;
+      for (const n of g.cells[k].neighbors) {
+        if (n <= k) continue;
+        const b = slots[n];
+        if (b < 0) continue;
+        const ax = w.ux[a], ay = w.uy[a], bx = w.ux[b], by = w.uy[b];
+        under.push((ax + bx) / 2, (ay + by) / 2, (bx - ax) / 2, (by - ay) / 2, 1.1, Shape.Glow, c[0], c[1], c[2], 0.28);
+      }
+    }
+  }
+
   // ---- rocks
   for (const r of w.rocks) {
     if (!r.alive || !vis(r.x, r.y, r.r * 1.2)) continue;
@@ -110,6 +128,18 @@ export function buildScene(w: World, fx: Fx, view: Bounds, s: SceneState, under:
     let [r, gg, b] = teamColor(uteam[i]);
     let size = 2.6 * role.size;
     let streak = 0.045;
+    const slot = w.uslot[i];
+    if (g.cells && slot >= 0) {
+      // Construct cell: part tint, size and glyph; barely any motion streak since it's bonded.
+      const part = g.cells[slot].part;
+      r = r * 0.55 + part.tint[0] * 0.45; gg = gg * 0.55 + part.tint[1] * 0.45; b = b * 0.55 + part.tint[2] * 0.45;
+      const f0 = uflash[i];
+      if (f0 > 0) { r += (1 - r) * f0; gg += (1 - gg) * f0; b += (1 - b) * f0; }
+      const wdt = Math.max(minW, 3.2 * part.size);
+      const sx = part.id === 'spike' ? g.hx * 5 : uvx[i] * 0.015, sy = part.id === 'spike' ? g.hy * 5 : uvy[i] * 0.015;
+      glow.push(x, y, sx, sy, wdt, Shape.Glow, r, gg, b, 0.95 + f0 * 0.5, wdt * s.zoom > 2.5 ? part.glyph : 0);
+      continue;
+    }
     if (g.role === Role.Striker) { streak = 0.1; size *= 0.75; }
     else if (g.role === Role.Artillery) { r = r * 0.6 + 0.4; gg = gg * 0.6 + 0.4; b = b * 0.6 + 0.4; }
     else if (g.role === Role.Harvester) { size *= 0.9; }

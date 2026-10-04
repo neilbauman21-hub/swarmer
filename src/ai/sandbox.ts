@@ -50,13 +50,14 @@ self.onmessage = (e) => {
       shield: (ids) => c('shield', { ids }),
       nova: (ids) => c('nova', { ids }),
       upgrade: (track) => c('upgrade', { track }),
+      build: (id, design) => c('build', { id: typeof id === 'object' && id ? id.id : id, design: typeof design === 'object' && design ? design.name : design }),
       log: (...a) => { if (logs.length < 5) logs.push(a.map(String).join(' ').slice(0, 160)); },
       done: () => { done = true; },
     };
     // Normalise group objects passed instead of ids.
     for (const k of Object.keys(api)) {
       const f = api[k];
-      if (['upgrade', 'log', 'done', 'split'].includes(k)) continue;
+      if (['upgrade', 'log', 'done', 'split', 'build'].includes(k)) continue;
       api[k] = (ids, ...rest) => f(Array.isArray(ids) ? ids.map((g) => (g && typeof g === 'object' ? g.id : g)) : (ids && typeof ids === 'object' ? ids.id : ids), ...rest);
     }
     try { tick(m.state, Object.freeze(api), memory); }

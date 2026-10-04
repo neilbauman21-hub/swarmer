@@ -401,7 +401,11 @@ export class Game {
       const col = TEAM_COLORS[g.team] ?? [1, 1, 1];
       const css = `rgb(${col.map((v) => Math.round(v * 255)).join(',')})`;
       let label = `${g.count}`;
-      if (own) {
+      if (g.design) {
+        label = `${g.design.name} · ${g.count}/${g.design.cells.length} cells`;
+        const state = orderLabel(g.order.type, false);
+        if (own && state) label += ` · ${state}`;
+      } else if (own) {
         label += ` · ${ROLES[g.role].name}`;
         if (g.formation !== Formation.Swarm) label += ` · ${FORMATIONS[g.formation].name}`;
         const state = orderLabel(g.order.type, g.harvesting);

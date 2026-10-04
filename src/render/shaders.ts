@@ -107,6 +107,8 @@ void main(){
       core=smoothstep(0.62,0.4,dd);
     } else if(glyph==3){ // harvester: soft orb
       core=smoothstep(0.5,0.0,d)*0.7;
+    } else if(glyph==5){ // reactor: hot bright core with a ring
+      core=smoothstep(0.45,0.0,d)*1.4+smoothstep(0.1,0.0,abs(d-0.55))*0.7;
     }
     float a=core+glow;
     o=vec4(c.rgb*a*c.a + vec3(core*0.35*c.a),0.0);

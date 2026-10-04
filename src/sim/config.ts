@@ -110,7 +110,7 @@ export const HARVEST_RATE = 0.05; // mass per second per unit, up to the rock's 
 export const MASS_PER_UNIT = 3;
 export const GROWTH_KNEE = 220; // team size at which growth runs at half speed
 export const RESEARCH_RATE = 1; // progress per second per unit
-export const RESEARCH_POINT_BASE = 1400;
+export const RESEARCH_POINT_BASE = 900;
 export const MAX_RESEARCH_LEVEL = 5;
 
 export const CRUISE_MAX = 2.4; // long journeys build speed up to this multiplier

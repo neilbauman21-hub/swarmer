@@ -5,6 +5,7 @@ import {
   ResearchTrack, TEAM_COLORS, UNIT_SPACING,
 } from './config';
 import { Grid } from './grid';
+import { CellStat, Design, MIN_CELLS, PART_BY_ID, cellStats, constructSpeed, designUnits, largestComponent } from './parts';
 import { Rng } from './rng';
 import { updateShips, updateWaves } from './ships';
 import { updateAI } from './ai';
@@ -55,6 +56,12 @@ export interface Group {
   born: number;
   recentLoss: number; // decaying counter of units lost, used by AI
   path: number[]; // queued waypoints (flat x,y pairs) after the current move target
+  // Construct (soft body) data; null for ordinary swarms.
+  design: Design | null;
+  cells: CellStat[] | null;
+  slotUnit: Int32Array | null; // cell index -> unit index (-1 = destroyed)
+  cSpeed: number;
+  integrityDirty: boolean;
   peak: number; // largest size this group reached
 }
 
@@ -69,6 +76,8 @@ export interface Team {
   pointsEarned: number;
   progress: number;
   levels: Record<ResearchTrack, number>;
+  unlocked: Set<string>; // researched particle parts
+  designs: Design[]; // construct blueprints this team can build
   homeX: number;
   homeY: number;
   kills: number;
@@ -159,6 +168,7 @@ export class World {
   readonly ualive = new Uint8Array(MAX_UNITS);
   readonly ugroup = new Int32Array(MAX_UNITS);
   readonly utgt = new Int32Array(MAX_UNITS).fill(-1);
+  readonly uslot = new Int16Array(MAX_UNITS).fill(-1); // construct cell index, -1 = free swarm unit
   private readonly sepX = new Float32Array(MAX_UNITS);
   private readonly sepY = new Float32Array(MAX_UNITS);
   hi = 0; // high-water mark of unit slots in use
@@ -204,7 +214,7 @@ export class World {
       this.teams.push({
         id: t, alive: true, ai: t !== 0, color: TEAM_COLORS[t], units: 0,
         cap: t === 0 ? PLAYER_CAP : diff.aiCap, points: 0, pointsEarned: 0, progress: 0,
-        levels: { speed: 0, damage: 0, hull: 0, replication: 0 },
+        levels: { speed: 0, damage: 0, hull: 0, replication: 0 }, unlocked: new Set(['drone']), designs: [],
         homeX: hx, homeY: hy, kills: 0, lost: 0, peak: 0, spawned: 0,
       });
       const g = this.createGroup(t, hx, hy);
@@ -248,7 +258,7 @@ export class World {
       formation: Formation.Swarm, role: Role.Drone, morphTo: Role.Drone, morphT: 0,
       energy: ENERGY_MAX * 0.5, cdDash: 0, cdShield: 0, cdNova: 0, dashT: 0, dashX: 0, dashY: 0,
       shieldT: 0, novaT: 0, cruise: 0, count: 0, cx: x, cy: y, radius: 10, spread: 0, enemyNear: false, combatT: 99,
-      progress: 0, harvesting: false, born: this.time, recentLoss: 0, path: [], peak: 0,
+      progress: 0, harvesting: false, born: this.time, recentLoss: 0, path: [], peak: 0, design: null, cells: null, slotUnit: null, cSpeed: 0, integrityDirty: false,
     };
     this.groups.push(g);
     return g;
@@ -274,6 +284,7 @@ export class World {
     this.uflash[i] = announce ? 1 : 0;
     this.useed[i] = this.rng.next();
     this.utgt[i] = -1;
+    this.uslot[i] = -1;
     team.units++;
     team.spawned++;
     g.count++;
@@ -291,6 +302,7 @@ export class World {
     const g = this.groups[this.ugroup[i]];
     g.count--;
     g.recentLoss += 1;
+    if (g.cells) g.integrityDirty = true;
   }
 
   maxHp(team: number, role: Role): number {
@@ -311,10 +323,16 @@ export class World {
 
   speedOf(g: Group): number {
     const t = this.teams[g.team];
+    if (g.cells) return g.cSpeed * (1 + 0.1 * t.levels.speed);
     return ROLES[g.role].speed * FORMATIONS[g.formation].speed * (1 + 0.1 * t.levels.speed);
   }
 
   rangeOf(g: Group): number {
+    if (g.cells) {
+      let r = 0;
+      for (let k = 0; k < g.cells.length; k++) if (g.slotUnit![k] >= 0 && g.cells[k].range > r) r = g.cells[k].range;
+      return r || 40;
+    }
     return ROLES[g.role].range * FORMATIONS[g.formation].range;
   }
 
@@ -390,7 +408,7 @@ export class World {
   cmdHarvest(ids: number[], rock: number): void {
     for (const id of ids) {
       const g = this.groups[id];
-      if (g?.alive && this.rocks[rock]?.alive) this.setOrder(g, 'harvest', g.ax, g.ay, rock);
+      if (g?.alive && !g.cells && this.rocks[rock]?.alive) this.setOrder(g, 'harvest', g.ax, g.ay, rock);
     }
   }
 
@@ -398,7 +416,7 @@ export class World {
     let ok = false;
     for (const id of ids) {
       const g = this.groups[id];
-      if (!g?.alive) continue;
+      if (!g?.alive || g.cells) continue;
       if (g.count < REPLICATE_MIN) {
         this.events.push({ t: 'fail', x: g.cx, y: g.cy, team: g.team, msg: `Needs ${REPLICATE_MIN}+ units to replicate` });
         continue;
@@ -414,7 +432,7 @@ export class World {
   cmdResearch(ids: number[]): void {
     for (const id of ids) {
       const g = this.groups[id];
-      if (!g?.alive) continue;
+      if (!g?.alive || g.cells) continue;
       this.setOrder(g, 'research', g.cx, g.cy);
       g.ax = g.cx;
       g.ay = g.cy;
@@ -434,7 +452,7 @@ export class World {
   /** Split a group in two along the direction (dx, dy). Returns the new group's id (the half facing dx,dy). */
   cmdSplit(id: number, dx: number, dy: number): number {
     const g = this.groups[id];
-    if (!g?.alive || g.count < 2) return -1;
+    if (!g?.alive || g.cells || g.count < 2) return -1;
     const units = this.unitsOf(g);
     const len = Math.hypot(dx, dy) || 1;
     const nx = dx / len, ny = dy / len;
@@ -473,6 +491,11 @@ export class World {
   cmdMerge(ids: number[]): number {
     const gs = ids.map((id) => this.groups[id]).filter((g) => g?.alive && g.count > 0);
     if (gs.length < 2) return gs[0]?.id ?? -1;
+    const construct = gs.find((g) => g.cells);
+    if (construct) {
+      for (const g of gs) if (g !== construct && !g.cells && g.team === construct.team) this.repair(construct, g);
+      return construct.id;
+    }
     const team = gs[0].team;
     const same = gs.filter((g) => g.team === team);
     same.sort((a, b) => b.count - a.count);
@@ -494,17 +517,109 @@ export class World {
     return keep.id;
   }
 
+  /** Research a particle part. */
+  buyPart(team: number, partId: string): boolean {
+    const t = this.teams[team];
+    const part = PART_BY_ID.get(partId);
+    if (!part || t.unlocked.has(partId) || t.points < part.cost) return false;
+    if (!part.requires.every((r) => t.unlocked.has(r))) return false;
+    t.points -= part.cost;
+    t.unlocked.add(partId);
+    this.events.push({ t: 'research', x: t.homeX, y: t.homeY, team, msg: `${part.name} unlocked` });
+    return true;
+  }
+
+  /**
+   * Assemble a construct from a swarm group. Each cell consumes `part.units` swarm units:
+   * one becomes the cell's particle, the rest are absorbed into it.
+   * Returns the new construct's group id, or -1.
+   */
+  cmdBuild(id: number, design: Design): number {
+    const g = this.groups[id];
+    if (!g?.alive || g.cells) return -1;
+    const t = this.teams[g.team];
+    const need = designUnits(design);
+    if (design.cells.some((c) => !t.unlocked.has(c.part))) {
+      this.events.push({ t: 'fail', x: g.cx, y: g.cy, team: g.team, msg: 'Research the parts in this design first' });
+      return -1;
+    }
+    if (g.count < need) {
+      this.events.push({ t: 'fail', x: g.cx, y: g.cy, team: g.team, msg: `${design.name} needs ${need} units (group has ${g.count})` });
+      return -1;
+    }
+    const units = this.unitsOf(g).sort((a, b) =>
+      Math.hypot(this.ux[a] - g.cx, this.uy[a] - g.cy) - Math.hypot(this.ux[b] - g.cx, this.uy[b] - g.cy));
+    const cg = this.createGroup(g.team, g.cx, g.cy);
+    cg.role = Role.Tank; // constructs count as heavy targets in the counter table
+    cg.hx = g.hx; cg.hy = g.hy;
+    this.initConstruct(cg, design);
+    let u = 0;
+    for (let k = 0; k < design.cells.length; k++) {
+      const part = PART_BY_ID.get(design.cells[k].part)!;
+      const i = units[u++];
+      this.ugroup[i] = cg.id;
+      this.uslot[i] = k;
+      this.uhp[i] = cg.cells![k].hp;
+      cg.slotUnit![k] = i;
+      for (let extra = 1; extra < part.units; extra++) this.absorb(units[u++], cg);
+    }
+    cg.count = design.cells.length;
+    g.count -= need;
+    this.setOrder(cg, 'idle', g.cx, g.cy);
+    this.events.push({ t: 'morph', x: g.cx, y: g.cy, team: g.team, r: 60, n: 1 });
+    return cg.id;
+  }
+
+  private initConstruct(cg: Group, design: Design): void {
+    const t = this.teams[cg.team];
+    cg.design = design;
+    cg.cells = cellStats(design, t.levels.hull, t.levels.damage);
+    cg.slotUnit = new Int32Array(design.cells.length).fill(-1);
+    cg.cSpeed = constructSpeed(design);
+  }
+
+  /** Remove a unit that was fused into a construct (not a combat loss). */
+  private absorb(i: number, into: Group): void {
+    if (i === undefined || !this.ualive[i]) return;
+    this.ualive[i] = 0;
+    this.free.push(i);
+    this.teams[this.uteam[i]].units--;
+    this.events.push({ t: 'spawn', x: this.ux[i], y: this.uy[i], team: into.team });
+  }
+
+  /** Feed swarm units into a construct's destroyed cells. */
+  private repair(cg: Group, donor: Group): void {
+    const pool = this.unitsOf(donor);
+    let used = 0;
+    for (let k = 0; k < cg.cells!.length && pool.length; k++) {
+      if (cg.slotUnit![k] >= 0) continue;
+      const cell = cg.cells![k];
+      if (pool.length < cell.part.units) break;
+      const i = pool.pop()!;
+      this.ugroup[i] = cg.id;
+      this.uslot[i] = k;
+      this.uhp[i] = cell.hp * 0.6;
+      cg.slotUnit![k] = i;
+      for (let extra = 1; extra < cell.part.units; extra++) this.absorb(pool.pop()!, cg);
+      used += cell.part.units;
+    }
+    if (used) {
+      donor.count -= used;
+      this.events.push({ t: 'morph', x: cg.cx, y: cg.cy, team: cg.team, r: cg.radius, n: 1 });
+    }
+  }
+
   cmdFormation(ids: number[], f: Formation): void {
     for (const id of ids) {
       const g = this.groups[id];
-      if (g?.alive) g.formation = f;
+      if (g?.alive && !g.cells) g.formation = f;
     }
   }
 
   cmdMorph(ids: number[], role: Role): void {
     for (const id of ids) {
       const g = this.groups[id];
-      if (!g?.alive || (g.role === role && g.morphT <= 0) || (g.morphTo === role && g.morphT > 0)) continue;
+      if (!g?.alive || g.cells || (g.role === role && g.morphT <= 0) || (g.morphTo === role && g.morphT > 0)) continue;
       g.morphTo = role;
       g.morphT = MORPH_TIME;
       this.events.push({ t: 'morph', x: g.cx, y: g.cy, team: g.team, r: g.radius });
@@ -555,6 +670,7 @@ export class World {
     for (const id of ids) {
       const g = this.groups[id];
       if (!g || !this.canAct(g) || g.cdNova > 0 || g.energy < NOVA.cost) continue;
+      if (g.cells) continue;
       if (g.count < NOVA.minUnits) {
         this.events.push({ t: 'fail', x: g.cx, y: g.cy, team: g.team, msg: `Nova needs ${NOVA.minUnits}+ units` });
         continue;
@@ -574,6 +690,9 @@ export class World {
     t.points--;
     const before = t.levels.hull;
     t.levels[track]++;
+    if (track === 'hull' || track === 'damage') {
+      for (const g of this.groups) if (g.alive && g.team === team && g.design) g.cells = cellStats(g.design, t.levels.hull, t.levels.damage);
+    }
     if (track === 'hull') {
       const k = (1 + 0.2 * t.levels.hull) / (1 + 0.2 * before);
       for (let i = 0; i < this.hi; i++) if (this.ualive[i] && this.uteam[i] === team) this.uhp[i] *= k;
@@ -582,7 +701,7 @@ export class World {
   }
 
   researchCost(team: number): number {
-    return RESEARCH_POINT_BASE * (1 + 0.35 * this.teams[team].pointsEarned);
+    return RESEARCH_POINT_BASE * (1 + 0.2 * this.teams[team].pointsEarned);
   }
 
   // ---------------------------------------------------------------- simulation
@@ -610,12 +729,14 @@ export class World {
       g.count = 0;
       g.cx = 0;
       g.cy = 0;
+      g.slotUnit?.fill(-1);
     }
     for (const t of this.teams) t.units = 0;
     for (let i = 0; i < this.hi; i++) {
       if (!this.ualive[i]) continue;
       const g = gs[this.ugroup[i]];
       g.count++;
+      if (g.slotUnit && this.uslot[i] >= 0) g.slotUnit[this.uslot[i]] = i;
       g.cx += this.ux[i];
       g.cy += this.uy[i];
       this.teams[this.uteam[i]].units++;
@@ -668,7 +789,9 @@ export class World {
 
   private updateGroup(g: Group): void {
     const team = this.teams[g.team];
-    g.energy = Math.min(ENERGY_MAX, g.energy + ENERGY_REGEN * DT);
+    let regen = ENERGY_REGEN;
+    if (g.cells) regen += this.constructUpkeep(g);
+    g.energy = Math.min(ENERGY_MAX, g.energy + regen * DT);
     g.cdDash = Math.max(0, g.cdDash - DT);
     g.cdShield = Math.max(0, g.cdShield - DT);
     g.cdNova = Math.max(0, g.cdNova - DT);
@@ -692,6 +815,17 @@ export class World {
     }
 
     const o = g.order;
+    // Idle constructs defend themselves: engage the nearest enemy swarm in reach (and so keep their guns at range).
+    if (g.cells && o.type === 'idle' && g.enemyNear && (this.tick + g.id) % 20 === 0) {
+      const reach = this.rangeOf(g) + 150;
+      let best: Group | null = null, bd = reach;
+      for (const e of this.groups) {
+        if (!e.alive || e.team === g.team || e.count <= 0) continue;
+        const d = Math.hypot(e.cx - g.cx, e.cy - g.cy) - e.radius;
+        if (d < bd) { bd = d; best = e; }
+      }
+      if (best) this.setOrder(g, 'attack', g.ax, g.ay, best.id);
+    }
     let gx = g.ax, gy = g.ay;
     let stopDist = 3;
     g.harvesting = false;
@@ -801,8 +935,9 @@ export class World {
       g.ax += dx * stepLen;
       g.ay += dy * stepLen;
       // Smoothly turn heading toward travel direction.
-      g.hx += (dx - g.hx) * Math.min(1, DT * 4);
-      g.hy += (dy - g.hy) * Math.min(1, DT * 4);
+      const turn = g.cells ? 1.4 : 4; // constructs have rotational inertia
+      g.hx += (dx - g.hx) * Math.min(1, DT * turn);
+      g.hy += (dy - g.hy) * Math.min(1, DT * turn);
     } else if (o.type === 'attack') {
       // Face the target when holding position.
       const fx = gx - g.cx, fy = gy - g.cy, fd = Math.hypot(fx, fy) || 1;
@@ -819,6 +954,59 @@ export class World {
     g.hx /= hl; g.hy /= hl;
     g.ax = this.clampX(g.ax);
     g.ay = this.clampX(g.ay);
+  }
+
+  /** Menders heal, reactors add energy, and pieces cut off from the main body break away. Returns bonus energy regen. */
+  private constructUpkeep(g: Group): number {
+    const cells = g.cells!, slots = g.slotUnit!;
+    let energy = 0;
+    const healTick = (this.tick + g.id) % 15 === 0;
+    for (let k = 0; k < cells.length; k++) {
+      if (slots[k] < 0) continue;
+      const part = cells[k].part;
+      energy += part.energy;
+      if (healTick && part.heal > 0) {
+        for (const n of cells[k].neighbors) {
+          const u = slots[n];
+          if (u >= 0) this.uhp[u] = Math.min(cells[n].hp, this.uhp[u] + part.heal * 0.25);
+        }
+      }
+    }
+    if (g.integrityDirty && (this.tick + g.id) % 6 === 0) {
+      g.integrityDirty = false;
+      this.checkIntegrity(g);
+    }
+    return Math.min(energy, ENERGY_REGEN * 2);
+  }
+
+  /** Cells no longer connected to the largest surviving chunk lose their bonds and become loose swarm units. */
+  private checkIntegrity(g: Group): void {
+    const cells = g.cells!, slots = g.slotUnit!, design = g.design!;
+    const alive: number[] = [];
+    for (let k = 0; k < cells.length; k++) if (slots[k] >= 0 && this.ualive[slots[k]]) alive.push(k);
+    const keep = alive.length >= MIN_CELLS
+      ? new Set(largestComponent(alive.map((k) => [design.cells[k].x, design.cells[k].y])).map((j) => alive[j]))
+      : new Set<number>();
+    const loose = alive.filter((k) => !keep.has(k));
+    if (!loose.length) return;
+    let lx = 0, ly = 0;
+    for (const k of loose) { lx += this.ux[slots[k]]; ly += this.uy[slots[k]]; }
+    const debris = this.createGroup(g.team, lx / loose.length, ly / loose.length);
+    const droneHp = this.maxHp(g.team, Role.Drone);
+    for (const k of loose) {
+      const i = slots[k];
+      this.ugroup[i] = debris.id;
+      this.uslot[i] = -1;
+      this.uhp[i] = Math.min(this.uhp[i], droneHp);
+      slots[k] = -1;
+      // Fling the broken piece outward.
+      const dx = this.ux[i] - g.cx, dy = this.uy[i] - g.cy, d = Math.hypot(dx, dy) || 1;
+      this.uvx[i] += (dx / d) * 120;
+      this.uvy[i] += (dy / d) * 120;
+    }
+    debris.count = loose.length;
+    g.count -= loose.length;
+    this.events.push({ t: 'explode', x: debris.ax, y: debris.ay, r: 30, team: g.team });
   }
 
   /** Growth slows as a team gets bigger (logistic), so splitting into many small groups is no exploit. */
@@ -869,7 +1057,7 @@ export class World {
       const i = hits[h * 2];
       const d = Math.sqrt(hits[h * 2 + 1]);
       const f = 1 - (1 - edge) * d / r;
-      const counter = role >= 0 ? COUNTER[role][this.groups[this.ugroup[i]].role] : 1;
+      const counter = role >= 0 ? COUNTER[role][this.roleOf(i)] : 1;
       this.damageUnit(i, dmg * f * counter, team);
       // Knockback sells the impact.
       const dx = this.ux[i] - x, dy = this.uy[i] - y;
@@ -886,9 +1074,22 @@ export class World {
     }
   }
 
+  /** Counter-table role of a unit: construct cells use their part's role. */
+  roleOf(i: number): Role {
+    const g = this.groups[this.ugroup[i]];
+    return g.cells && this.uslot[i] >= 0 ? g.cells[this.uslot[i]].part.counter : g.role;
+  }
+
   damageUnit(i: number, dmg: number, attacker: number): void {
     const g = this.groups[this.ugroup[i]];
     let def = ROLES[g.role].defense + FORMATIONS[g.formation].defense;
+    if (g.cells && this.uslot[i] >= 0) {
+      // Construct cell: its own armor plus the best touching shield node.
+      const c = g.cells[this.uslot[i]];
+      let shield = 0;
+      for (const n of c.neighbors) if (g.slotUnit![n] >= 0 && g.cells[n].part.shield > shield) shield = g.cells[n].part.shield;
+      def = c.part.armor + (1 - c.part.armor) * shield;
+    }
     if (g.shieldT > 0) def = Math.max(def, 0) + (1 - Math.max(def, 0)) * SHIELD.reduction;
     if (def > 0.92) def = 0.92;
     this.uhp[i] -= dmg * (1 - def);
@@ -936,11 +1137,16 @@ export class World {
       const x = ux[i], y = uy[i];
       const seed = useed[i];
       uflash[i] = Math.max(0, uflash[i] - DT * 4);
+      const slot = this.uslot[i];
+      const cellS = slot >= 0 && g.cells ? g.cells[slot] : null;
 
-      // ---- desired position from the formation shape field
+      // ---- desired position from the formation shape field (or the construct's rotated grid slot)
       let px: number, py: number;
       const ox = x - g.ax, oy = y - g.ay;
-      if (g.harvesting) {
+      if (cellS) {
+        px = g.ax + cellS.ox * g.hx - cellS.oy * g.hy;
+        py = g.ay + cellS.ox * g.hy + cellS.oy * g.hx;
+      } else if (g.harvesting) {
         const r = this.rocks[g.order.rock];
         const rx = x - r.x, ry = y - r.y;
         const rd = Math.sqrt(rx * rx + ry * ry) || 1;
@@ -961,16 +1167,17 @@ export class World {
         py += (g.cy - py) * k * 0.8;
       }
 
-      let maxSp = role.speed * FORMATIONS[g.formation].speed * (1 + 0.1 * team.levels.speed);
+      let maxSp = cellS ? g.cSpeed * 2 * (1 + 0.1 * team.levels.speed) : role.speed * FORMATIONS[g.formation].speed * (1 + 0.1 * team.levels.speed);
       maxSp *= 1 + (CRUISE_MAX - 1) * Math.min(1, g.cruise / CRUISE_RAMP);
       if (g.dashT > 0) maxSp *= DASH.speedMult;
-      let dvx = (px - x) * 3.2, dvy = (py - y) * 3.2;
+      const spring = cellS ? 7 : 3.2;
+      let dvx = (px - x) * spring, dvy = (py - y) * spring;
 
       // ---- targeting & firing
       ucd[i] -= DT;
       let t = utgt[i];
-      if (g.enemyNear) {
-        const range = role.range * FORMATIONS[g.formation].range;
+      if (g.enemyNear && !(cellS && cellS.damage <= 0)) {
+        const range = cellS ? cellS.range : role.range * FORMATIONS[g.formation].range;
         if (t !== -1 && !this.targetValid(i, t, range * 1.7 + 40)) t = utgt[i] = -1;
         if (t === -1 && (this.tick + i) % 10 === 0) t = utgt[i] = this.acquire(i, range + 60 + (g.order.type === 'attack' ? 80 : 0));
         if (t !== -1) {
@@ -979,7 +1186,7 @@ export class World {
           else { const s = ships[-t - 2]; tx = s.x; ty = s.y; tr = SHIPS[s.type].radius; }
           const ddx = tx - x, ddy = ty - y;
           const d = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
-          if (g.role === Role.Striker && g.morphT <= 0) {
+          if (!cellS && g.role === Role.Striker && g.morphT <= 0) {
             // Lancers peel off and lunge, then swing back into formation.
             const lunge = Math.sin(time * 6 + seed * 20) * 0.5 + 0.5;
             if (d < range + tr + 140) {
@@ -987,7 +1194,7 @@ export class World {
               dvy = dvy * 0.2 + (ddy / d) * maxSp * (0.8 + lunge * 0.6);
             }
           }
-          const tooClose = g.role === Role.Artillery && d < ARTILLERY_MIN_RANGE;
+          const tooClose = cellS ? cellS.part.splash > 0 && d < 22 : g.role === Role.Artillery && d < ARTILLERY_MIN_RANGE;
           if (tooClose && (this.tick + i) % 10 === 5) utgt[i] = -1; // look for something farther away
           if (d <= range + tr && !tooClose && ucd[i] <= 0 && g.morphT <= 0 && g.novaT <= 0) {
             this.fire(i, g, t, tx, ty);
@@ -1002,7 +1209,7 @@ export class World {
         const ram = (g.role === Role.Striker ? DASH.strikerRam : DASH.ramDamage) * (1 + 0.2 * team.levels.damage);
         grid.query(x, y, 10, (j) => {
           if (ualive[j] && uteam[j] !== g.team) {
-            this.damageUnit(j, ram * COUNTER[g.role][this.groups[ugroup[j]].role], g.team);
+            this.damageUnit(j, ram * COUNTER[this.roleOf(i)][this.roleOf(j)], g.team);
             uvx[j] += uvx[i] * 0.4;
             uvy[j] += uvy[i] * 0.4;
             this.events.push({ t: 'melee', x: ux[j], y: uy[j], team: g.team });
@@ -1011,9 +1218,9 @@ export class World {
         });
       }
 
-      // ---- separation (inline grid walk; each unit refreshes every other tick)
-      let sx = sepX[i], sy = sepY[i];
-      if (((i + this.tick) & 1) === 0) {
+      // ---- separation (inline grid walk; each unit refreshes every other tick). Bonded cells skip it.
+      let sx = cellS ? 0 : sepX[i], sy = cellS ? 0 : sepY[i];
+      if (!cellS && ((i + this.tick) & 1) === 0) {
       sx = 0; sy = 0;
       let cx0 = ((x - sep) / cell) | 0, cx1 = ((x + sep) / cell) | 0;
       let cy0 = ((y - sep) / cell) | 0, cy1 = ((y + sep) / cell) | 0;
@@ -1065,14 +1272,15 @@ export class World {
 
       // Organic shimmer.
       const w = time * (1.3 + seed) + seed * 40;
-      dvx += Math.cos(w) * 14;
-      dvy += Math.sin(w * 1.3) * 14;
+      const jitter = cellS ? 2 : 14;
+      dvx += Math.cos(w) * jitter;
+      dvy += Math.sin(w * 1.3) * jitter;
 
       // Clamp desired speed then steer.
       const dl = Math.sqrt(dvx * dvx + dvy * dvy);
       const lim = maxSp * 1.15;
       if (dl > lim) { dvx *= lim / dl; dvy *= lim / dl; }
-      const acc = g.dashT > 0 ? 10 : 6.5;
+      const acc = g.dashT > 0 ? 10 : cellS ? 9 : 6.5;
       uvx[i] += (dvx - uvx[i]) * Math.min(1, acc * DT);
       uvy[i] += (dvy - uvy[i]) * Math.min(1, acc * DT);
       let nx = x + uvx[i] * DT, ny = y + uvy[i] * DT;
@@ -1141,6 +1349,7 @@ export class World {
   }
 
   private fire(i: number, g: Group, t: number, tx: number, ty: number): void {
+    if (g.cells && this.uslot[i] >= 0) return this.fireCell(i, g, g.cells[this.uslot[i]], t, tx, ty);
     const role = ROLES[g.role];
     const team = this.teams[g.team];
     this.ucd[i] = role.cooldown * (0.85 + this.rng.next() * 0.3);
@@ -1158,7 +1367,7 @@ export class World {
       this.uvy[i] -= ((ty - this.uy[i]) / (d || 1)) * 60;
       return;
     }
-    if (t >= 0) this.damageUnit(t, dmg * COUNTER[g.role][this.groups[this.ugroup[t]].role], g.team);
+    if (t >= 0) this.damageUnit(t, dmg * COUNTER[g.role][this.roleOf(t)], g.team);
     else {
       const s = this.ships[-t - 2];
       this.damageShip(s, dmg, g.team);
@@ -1166,6 +1375,30 @@ export class World {
     }
     if (g.role === Role.Striker) this.events.push({ t: 'melee', x: tx, y: ty, team: g.team });
     else this.events.push({ t: 'tracer', x: this.ux[i], y: this.uy[i], x2: tx, y2: ty, team: g.team });
+  }
+
+  private fireCell(i: number, g: Group, c: CellStat, t: number, tx: number, ty: number): void {
+    this.ucd[i] = c.cooldown * (0.85 + this.rng.next() * 0.3);
+    g.combatT = 0;
+    const counter = c.part.counter;
+    if (c.part.splash > 0) {
+      const d = Math.hypot(tx - this.ux[i], ty - this.uy[i]);
+      this.shells.push({
+        x0: this.ux[i], y0: this.uy[i], x1: tx + this.rng.range(-6, 6), y1: ty + this.rng.range(-6, 6),
+        t: 0, dur: 0.35 + d / 420, dmg: c.damage, splash: c.part.splash, team: g.team, big: false, hits: ARTILLERY_HITS + 1, role: counter,
+      });
+      this.events.push({ t: 'shellFire', x: this.ux[i], y: this.uy[i], team: g.team });
+      this.uvx[i] -= ((tx - this.ux[i]) / (d || 1)) * 40;
+      this.uvy[i] -= ((ty - this.uy[i]) / (d || 1)) * 40;
+      return;
+    }
+    if (t >= 0) this.damageUnit(t, c.damage * COUNTER[counter][this.roleOf(t)], g.team);
+    else {
+      this.damageShip(this.ships[-t - 2], c.damage, g.team);
+      if (this.rng.next() < 0.3) this.events.push({ t: 'hitShip', x: tx, y: ty, team: g.team });
+    }
+    if (c.part.range < 40) this.events.push({ t: 'melee', x: tx, y: ty, team: g.team });
+    else this.events.push({ t: 'tracer', x: this.ux[i], y: this.uy[i], x2: tx, y2: ty, team: g.team, r: c.part.id === 'lance' ? 2 : undefined });
   }
 
   private updateProjectiles(): void {

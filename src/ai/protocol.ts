@@ -1,5 +1,6 @@
 import { FORMATIONS, Formation, ROLES, Role, RESEARCH_TRACKS, SHIPS, TEAM_NAMES, type ResearchTrack } from '../sim/config';
 import type { World } from '../sim/world';
+import { PRESETS, designUnits } from '../sim/parts';
 
 /** What a swarm program sees each tick. Plain JSON so it can cross into the sandbox worker. */
 export interface SwarmState {
@@ -19,6 +20,7 @@ export interface SwarmState {
   enemies: { id: number; team: string; count: number; x: number; y: number; radius: number; role: string; order: string }[];
   ships: { id: number; type: string; x: number; y: number; hp: number; maxHp: number }[];
   rocks: { id: number; x: number; y: number; mass: number; radius: number; wreck: boolean }[];
+  designs: { name: string; units: number; buildable: boolean }[];
 }
 
 export type Ids = number | number[];
@@ -38,7 +40,8 @@ export type Command =
   | { op: 'dash'; ids: Ids; x: number; y: number }
   | { op: 'shield'; ids: Ids }
   | { op: 'nova'; ids: Ids }
-  | { op: 'upgrade'; track: string };
+  | { op: 'upgrade'; track: string }
+  | { op: 'build'; id: number; design: string };
 
 const ROLE_NAMES = ROLES.map((r) => r.name.toLowerCase());
 const FORMATION_NAMES = FORMATIONS.map((f) => f.name.toLowerCase());
@@ -54,7 +57,7 @@ export function snapshot(w: World, team: number, selected: Iterable<number>): Sw
     if (g.team === team) {
       groups.push({
         id: g.id, count: g.count, x: round(g.cx), y: round(g.cy), radius: round(g.radius),
-        role: ROLE_NAMES[g.morphT > 0 ? g.morphTo : g.role], formation: FORMATION_NAMES[g.formation], order: g.order.type,
+        role: ROLE_NAMES[g.morphT > 0 ? g.morphTo : g.role], formation: FORMATION_NAMES[g.formation], order: g.cells ? 'construct:' + g.order.type : g.order.type,
         energy: round(g.energy), inCombat: g.combatT < 1, harvesting: g.harvesting,
         ready: { dash: g.cdDash <= 0 && g.energy >= 30, shield: g.cdShield <= 0 && g.energy >= 40, nova: g.cdNova <= 0 && g.energy >= 60 },
       });
@@ -72,7 +75,13 @@ export function snapshot(w: World, team: number, selected: Iterable<number>): Sw
     groups, enemies,
     ships: w.ships.filter((s) => s.alive).map((s) => ({ id: s.id, type: SHIP_NAMES[s.type], x: round(s.x), y: round(s.y), hp: round(s.hp), maxHp: s.maxHp })),
     rocks: w.rocks.filter((r) => r.alive).map((r) => ({ id: r.id, x: round(r.x), y: round(r.y), mass: round(r.mass), radius: round(r.r), wreck: r.wreck })),
+    designs: allDesigns(w, team).map((d) => ({ name: d.name, units: designUnits(d), buildable: d.cells.every((c) => t.unlocked.has(c.part)) })),
   };
+}
+
+function allDesigns(w: World, team: number) {
+  const own = w.teams[team].designs;
+  return [...own, ...PRESETS.filter((p) => !own.some((d) => d.name === p.name))];
 }
 
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -155,6 +164,12 @@ export function applyCommands(w: World, team: number, cmds: unknown[], limit = 8
       case 'nova':
         if (ids.length && w.cmdNova(ids)) applied++;
         break;
+      case 'build': {
+        const [id] = own(c.id);
+        const d = allDesigns(w, team).find((x) => x.name.toLowerCase() === String(c.design).toLowerCase());
+        if (id !== undefined && d && w.cmdBuild(id, d) >= 0) applied++;
+        break;
+      }
       case 'upgrade': {
         const track = RESEARCH_TRACKS.find((r) => r.id === c.track);
         if (track && w.buyResearch(team, track.id)) applied++;

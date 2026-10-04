@@ -19,6 +19,7 @@ state.groups: my swarms [{id,count,x,y,radius,role,formation,order,energy,inComb
 state.enemies: rival swarms [{id,team,count,x,y,radius,role,order}] team: 'ember'|'verdant'|'umbra'
 state.ships: hostile raiders [{id,type,x,y,hp,maxHp}] type: 'scout'|'bomber'|'bulwark'|'siege'
 state.rocks: harvestable asteroids [{id,x,y,mass,radius,wreck}]
+state.designs: construct blueprints [{name,units,buildable}]. Groups whose order starts with 'construct:' are constructs (soft-body vehicles).
 
 API (ids = a group id, a group object, or an array of either)
 api.move(ids,x,y)  api.path(ids,[[x,y],...])  api.hold(ids)
@@ -28,6 +29,7 @@ api.merge(ids)  api.replicate(ids) (group needs 20+ units)  api.research(ids)
 api.formation(ids, name)  api.morph(ids, role) (takes 2 seconds)
 api.dash(ids,x,y) (30 energy)  api.shield(ids) (40 energy)  api.nova(ids) (60 energy, sacrifices 15% of the group in a big blast)
 api.upgrade('speed'|'damage'|'hull'|'replication') spends a research point
+api.build(group, designName) turns part of a swarm group into a construct (needs design.units units and buildable === true); it appears as a new group next tick. Constructs can move, attack, dash and shield, but not replicate, research, split or change formation. Merging a swarm into a construct repairs it.
 api.log(text) shows a short message to the player; api.done() ends the program.
 Helpers available as globals: dist(a,b), nearest(from, list), byDistance(from, list), centroid(groups).
 

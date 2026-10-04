@@ -40,6 +40,7 @@ function runProgram(code: string, w: World, seconds: number): { logs: string[]; 
       shield: (g: any) => cmds.push({ op: 'shield', ids: ids(g) }),
       nova: (g: any) => cmds.push({ op: 'nova', ids: ids(g) }),
       upgrade: (track: string) => cmds.push({ op: 'upgrade', track }),
+      build: (g: any, design: string) => cmds.push({ op: 'build', id: id(g), design }),
       log: (m: string) => logs.push(m),
       done: () => { done = true; },
     };
@@ -66,6 +67,15 @@ describe('swarm programs', () => {
     expect(w.groupsOf(0).length).toBeGreaterThan(1);
     expect(harvesting.length).toBeGreaterThan(0);
     expect(w.teams[0].units).toBeGreaterThan(60);
+  });
+
+  it('a program can build a researched construct by name', () => {
+    const w = new World({ seed: 24, rivals: 1, waves: false, startUnits: 80 });
+    w.teams[0].points = 10;
+    for (const p of ['plate', 'spike', 'thruster']) w.buyPart(0, p);
+    const code = "function tick(state, api, memory) { if (memory.done) return; memory.done = true; const d = state.designs.find((x) => x.buildable); api.build(state.groups[0], d.name); }";
+    runProgram(code, w, 2);
+    expect(w.groupsOf(0).some((g) => g.cells)).toBe(true);
   });
 
   it('rejects commands for enemy groups, bad ids and non-finite coordinates', () => {
@@ -116,5 +126,16 @@ describe('Pages Function /api/swarm', () => {
     expect(replyText({ choices: [{ message: { content: 'b' } }] })).toBe('b');
     expect(replyText({ output: [{ type: 'reasoning', content: [{ text: 'x' }] }, { type: 'message', content: [{ text: 'c' }] }] })).toBe('c');
     expect(extractCode('blah\nfunction tick(){}')).toBe('function tick(){}');
+  });
+});
+
+describe('Pages Function /api/design', () => {
+  it('returns the design JSON a model writes, even wrapped in prose', async () => {
+    const { onRequestPost: design } = await import('../functions/api/design');
+    const AI = { run: async () => ({ response: 'Sure!\n```json\n{"name":"Brick","cells":[{"x":0,"y":0,"part":"plate"},{"x":1,"y":0,"part":"spike"},{"x":-1,"y":0,"part":"thruster"}]}\n```' }) };
+    const res = await design({ request: new Request('https://x/api/design', { method: 'POST', body: JSON.stringify({ prompt: 'a brick', unlocked: ['plate', 'spike', 'thruster', 'bogus'] }) }), env: { AI } });
+    const data = await res.json();
+    expect(res.status).toBe(200);
+    expect(data.design.cells).toHaveLength(3);
   });
 });

@@ -1,6 +1,7 @@
 import { MAX_RESEARCH_LEVEL, RESEARCH_TRACKS, SHIPS, TEAM_COLORS, TEAM_NAMES } from '../sim/config';
 import type { Game } from '../game';
 import { PromptDock } from './prompt';
+import { PARTS, PART_BY_ID, type PartDef } from '../sim/parts';
 
 /**
  * Minimal HUD: a slim status line, rival list, minimap, and the prompt dock as the main control.
@@ -48,7 +49,37 @@ export class Hud {
   }
 
   private buildResearch(): void {
-    this.research.innerHTML = '<div class="panel-title">Research <span class="pts"></span></div><div class="progress"><div></div></div>';
+    // Tiers come from the requirement depth, so the tree lays itself out.
+    const depth = (id: string): number => {
+      const p = PART_BY_ID.get(id)!;
+      return p.requires.length ? 1 + Math.max(...p.requires.map(depth)) : 0;
+    };
+    const tiers: PartDef[][] = [];
+    for (const p of PARTS) {
+      if (p.id === 'drone') continue;
+      (tiers[depth(p.id)] ??= []).push(p);
+    }
+    let html = '<div class="panel-title">Research <span class="pts"></span></div><div class="progress"><div></div></div>';
+    html += '<div class="tree-head">Particles <small>unlock parts for constructs, then describe one in the Design tab</small></div><div class="tree">';
+    tiers.forEach((tier, i) => {
+      html += `<div class="tier"><div class="tier-label">Tier ${i + 1}</div>`;
+      for (const p of tier) {
+        const c = p.tint.map((v) => Math.round(v * 255)).join(',');
+        const req = p.requires.length ? `Needs ${p.requires.map((r) => PART_BY_ID.get(r)!.name).join(' + ')}. ` : '';
+        html += `<button class="node" data-part="${p.id}" title="${req}${p.blurb}"><i style="background:rgb(${c})"></i><b>${p.name}</b><small>${p.blurb}</small><span class="cost">${p.cost} pt${p.cost > 1 ? 's' : ''}</span></button>`;
+      }
+      html += '</div>';
+    });
+    html += '</div><div class="tree-head">Upgrades</div>';
+    this.research.innerHTML = html;
+    this.research.querySelectorAll<HTMLButtonElement>('.node').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (this.game.world.buyPart(0, b.dataset.part!)) {
+          this.game.audio.ui('order');
+          this.refreshResearch();
+          this.dock.refreshDesigns();
+        } else this.game.audio.ui('error');
+      }));
     for (const t of RESEARCH_TRACKS) {
       const row = div('track');
       row.dataset.track = t.id;
@@ -63,7 +94,7 @@ export class Hud {
       this.research.append(row);
     }
     const hint = div('hint');
-    hint.innerHTML = 'Earn points with <kbd>T</kbd> on a group. <kbd>Y</kbd> closes this panel.';
+    hint.innerHTML = 'Earn points by pressing <kbd>T</kbd> on a group. <kbd>Y</kbd> closes this panel.';
     this.research.append(hint);
   }
 
@@ -71,6 +102,15 @@ export class Hud {
     const team = this.game.world.teams[0];
     this.research.querySelector('.pts')!.textContent = `${team.points} point${team.points === 1 ? '' : 's'}`;
     (this.research.querySelector('.progress > div') as HTMLElement).style.width = `${(100 * team.progress) / this.game.world.researchCost(0)}%`;
+    this.research.querySelectorAll<HTMLButtonElement>('.node').forEach((b) => {
+      const p = PART_BY_ID.get(b.dataset.part!)!;
+      const owned = team.unlocked.has(p.id);
+      const ready = !owned && p.requires.every((r) => team.unlocked.has(r));
+      b.classList.toggle('owned', owned);
+      b.classList.toggle('ready', ready && team.points >= p.cost);
+      b.classList.toggle('locked', !owned && !ready);
+      b.disabled = owned || !ready || team.points < p.cost;
+    });
     for (const row of this.research.querySelectorAll<HTMLElement>('.track')) {
       const id = row.dataset.track as keyof typeof team.levels;
       const lvl = team.levels[id];
