@@ -1,3 +1,4 @@
+import { hyp } from './math';
 import { DIFFICULTY, Formation, REPLICATE_MIN, Role, SHIPS } from './config';
 import type { Group, Team, World } from './world';
 
@@ -7,7 +8,6 @@ interface AIState {
   personality: number; // 0..1: low = turtle/economic, high = aggressive
 }
 
-const states = new WeakMap<World, Map<number, AIState>>();
 
 interface Threat {
   x: number;
@@ -19,18 +19,15 @@ interface Threat {
 }
 
 export function updateAI(w: World): void {
-  let map = states.get(w);
-  if (!map) {
-    map = new Map();
-    states.set(w, map);
-  }
+  // AI memory lives on the world so it is part of lockstep snapshots.
+  const map = w.aiMem as Record<number, AIState>;
   const diff = DIFFICULTY[w.difficulty];
   for (const team of w.teams) {
     if (!team.ai || !team.alive) continue;
-    let st = map.get(team.id);
+    let st = map[team.id];
     if (!st) {
       st = { next: 1 + team.id * 0.17, researchIdx: team.id, personality: w.rng.next() };
-      map.set(team.id, st);
+      map[team.id] = st;
     }
     if (w.time < st.next) continue;
     st.next = w.time + (0.45 + w.rng.next() * 0.3) * diff.aiThink;
@@ -61,7 +58,7 @@ function think(w: World, team: Team, st: AIState): void {
     }
     const o = g.order;
     if (o.type === 'attack' && g.count > 30) continue;
-    if (o.type === 'move' && Math.hypot(o.x - g.ax, o.y - g.ay) > 10) {
+    if (o.type === 'move' && hyp(o.x - g.ax, o.y - g.ay) > 10) {
       tryMerge(w, g, mine);
       continue;
     }
@@ -99,14 +96,14 @@ function assessThreat(w: World, g: Group): Threat | null {
   let strength = 0;
   for (const o of w.groups) {
     if (!o.alive || o.team === g.team || o.count <= 0) continue;
-    const d = Math.hypot(o.cx - g.cx, o.cy - g.cy) - o.radius;
+    const d = hyp(o.cx - g.cx, o.cy - g.cy) - o.radius;
     if (d > sense) continue;
     strength += o.count * (o.role === Role.Tank ? 1.6 : 1);
     if (!nearest || d < nearest.dist) nearest = { x: o.cx, y: o.cy, strength: 0, group: o.id, ship: -1, dist: d };
   }
   for (const s of w.ships) {
     if (!s.alive) continue;
-    const d = Math.hypot(s.x - g.cx, s.y - g.cy) - SHIPS[s.type].radius;
+    const d = hyp(s.x - g.cx, s.y - g.cy) - SHIPS[s.type].radius;
     if (d > sense) continue;
     strength += s.hp / 9;
     if (!nearest || d < nearest.dist) nearest = { x: s.x, y: s.y, strength: 0, group: -1, ship: s.id, dist: d };
@@ -138,7 +135,7 @@ function handleCombat(w: World, g: Group, t: Threat, mine: Group[]): void {
   const ry = refuge ? refuge.cy : team.homeY;
   if (g.formation !== Formation.Ring) w.cmdFormation([g.id], Formation.Ring);
   if (g.recentLoss > 2) w.cmdShield([g.id]);
-  if (refuge && Math.hypot(refuge.cx - g.cx, refuge.cy - g.cy) < refuge.radius + g.radius + 40) {
+  if (refuge && hyp(refuge.cx - g.cx, refuge.cy - g.cy) < refuge.radius + g.radius + 40) {
     w.cmdMerge([refuge.id, g.id]);
     return;
   }
@@ -155,7 +152,7 @@ function handleArmy(w: World, g: Group, team: Team): void {
   for (const o of w.groups) {
     if (!o.alive || o.team === g.team || o.count <= 0) continue;
     if (o.count > g.count * 1.25) continue;
-    const d = Math.hypot(o.cx - g.cx, o.cy - g.cy);
+    const d = hyp(o.cx - g.cx, o.cy - g.cy);
     const score = o.count * 1.5 - d * 0.05 + (o.order.type === 'replicate' || o.order.type === 'harvest' ? 40 : 0);
     if (score > bestScore) { bestScore = score; best = o; }
   }
@@ -190,13 +187,13 @@ function freeRock(w: World, g: Group, maxDist: number): number {
   let best = -1, bestD = maxDist;
   for (const r of w.rocks) {
     if (!r.alive || r.mass < 20) continue;
-    const d = Math.hypot(r.x - g.cx, r.y - g.cy);
+    const d = hyp(r.x - g.cx, r.y - g.cy);
     if (d >= bestD) continue;
     let taken = false;
     for (const o of w.groups) {
       if (!o.alive) continue;
       if (o.team === g.team && o.order.type === 'harvest' && o.order.rock === r.id) { taken = true; break; }
-      if (o.team !== g.team && o.count > g.count * 0.5 && Math.hypot(o.cx - r.x, o.cy - r.y) < r.r + o.radius + 200) { taken = true; break; }
+      if (o.team !== g.team && o.count > g.count * 0.5 && hyp(o.cx - r.x, o.cy - r.y) < r.r + o.radius + 200) { taken = true; break; }
     }
     if (!taken) { bestD = d; best = r.id; }
   }
@@ -207,7 +204,7 @@ function tryMerge(w: World, g: Group, mine: Group[]): void {
   let best: Group | null = null, bestD = 1e9;
   for (const o of mine) {
     if (o === g || !o.alive) continue;
-    const d = Math.hypot(o.cx - g.cx, o.cy - g.cy);
+    const d = hyp(o.cx - g.cx, o.cy - g.cy);
     if (d < bestD) { bestD = d; best = o; }
   }
   if (!best) return;

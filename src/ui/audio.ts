@@ -2,6 +2,7 @@ import type { GameEvent } from '../sim/world';
 
 /** Procedural WebAudio sound effects. No assets, throttled so big fights stay pleasant. */
 export class Audio {
+  me = 0; // local player's team
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private noise: AudioBuffer | null = null;
@@ -202,7 +203,7 @@ export class Audio {
           this.tone('triangle', e.n ? 400 : 800, e.n ? 900 : 300, 0.3, 0.07 * v);
           break;
         case 'research':
-          if (e.team === 0) { this.tone('sine', 660, 660, 0.15, 0.1); this.tone('sine', 990, 990, 0.25, 0.08, 0.12); }
+          if (e.team === this.me) { this.tone('sine', 660, 660, 0.15, 0.1); this.tone('sine', 990, 990, 0.25, 0.08, 0.12); }
           break;
         case 'bomb':
           if (this.take('boom')) this.tone('square', 900, 900, 0.06, 0.05 * v);
@@ -212,7 +213,7 @@ export class Audio {
           this.tone('sawtooth', 165, 130, 1.2, 0.08);
           break;
         case 'fail':
-          if (e.team === 0) this.tone('square', 220, 160, 0.15, 0.06);
+          if (e.team === this.me) this.tone('square', 220, 160, 0.15, 0.06);
           break;
       }
     }

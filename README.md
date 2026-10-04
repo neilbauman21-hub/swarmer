@@ -1,6 +1,8 @@
 # Swarmer
 
-A real-time swarm strategy game for the browser, inspired by [nohope.io](https://nohope.io) (and the older *Eufloria*). You command thousands of glowing units: harvest asteroids into new units, split and merge groups, morph them into specialised roles, switch formations, and fire off abilities to wipe out rival swarms while raider fleets hunt everyone.
+A multiplayer real-time swarm strategy game for the browser, inspired by [nohope.io](https://nohope.io) (and the older *Eufloria*). Up to four players (bots fill empty slots) command thousands of glowing units each: mine asteroids into new units, split and merge groups, morph them into specialised roles, switch formations, and fire off abilities to wipe out the other swarms while raider fleets hunt everyone. Play at **https://swarm.lein-enterprises.lol**.
+
+**Multiplayer.** *Quick match* drops you into the next open sector; it launches 15 seconds after the first player arrives, and bots fill the empty corners. *Create room* gives you a 5-letter code and an invite link; the host picks the number of bots, their skill, and the map size. If a player leaves mid-match, an AI takes over their swarm.
 
 **Talk to your swarm.** Press `Enter`, type an order like *"split into three, harvest the closest rocks, then hunt Ember with strikers"*, and an LLM (Cloudflare Workers AI) writes a small JavaScript program that commands your swarm live. The code runs in a sandboxed Web Worker with no DOM or network access, gets killed if it hangs, and can only issue validated game orders. Click **Show code** to read what it wrote. nohope.io pioneered the prompt-to-code idea; Swarmer's take adds the sandbox, live code view, persistent standing orders (`memory`), and four ready-made programs that work offline.
 
@@ -31,7 +33,8 @@ Requires a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari). Des
 |---|---|
 | LMB click | Move / attack / harvest with the selection; click your own swarm to select it |
 | LMB drag | Box select (Shift adds, double-click = all on screen) |
-| RMB | Context command: move, attack enemy, harvest rock, or fly over and join a friendly group |
+| RMB on your swarm | Order menu: replicate, research, split, merge, hold, morph, formation, abilities, fabricate, research tree |
+| RMB elsewhere | Move, attack enemy, harvest rock; drag to draw a route, Shift queues waypoints |
 | Wheel, MMB drag, arrows, screen edge | Zoom to cursor, pan |
 | `S` / `G` / `H` | Split toward cursor / merge / hold |
 | `B` / `T` / `Y` | Replicate (20+ units) / research / research panel |
@@ -39,11 +42,17 @@ Requires a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari). Des
 | `Z` `X` `C` `V` | Swarm / Wedge / Ring / Line formation |
 | `1`–`5` | Morph: Drone, Striker, Tank, Harvester, Artillery |
 | `Tab` / `Space` / `` ` `` | Cycle groups / center camera / select all |
-| `P` / `Esc` | Pause |
+| `Esc` | Menu (multiplayer matches keep running) |
 
-## Deploying (Cloudflare Worker + Workers AI)
+## How multiplayer works
 
-`npm run deploy` publishes a Worker that serves `dist/` and the AI endpoints (`wrangler.worker.toml`). `npm run deploy:pages` is the Pages alternative.
+Deterministic lockstep. Every client runs the same 60 Hz simulation; a Durable Object per room (`worker/room.ts`) only relays orders. Ten times a second it broadcasts a numbered *turn* with every order received since the last one, tagged with the sender's team, so nobody can order someone else's swarm. Clients apply turn *n* right before simulating tick *6n*. Everything a player does, including mouse orders, research, blueprints from the AI designer and the output of LLM-written programs, goes through this path. The simulation avoids engine-specific floating point (`Math.hypot` is replaced with `sqrt`, which IEEE 754 defines exactly). Every 2 seconds each client reports a state hash; on a mismatch the host sends a gzipped snapshot (`World.serialize`) that the others load. A `Matchmaker` Durable Object hands out the current quick-match room.
+
+Bandwidth is tiny (orders only), so thousands of units cost nothing on the wire. The price is input latency of about one round trip plus up to 100 ms.
+
+## Deploying (Cloudflare Worker + Workers AI + Durable Objects)
+
+`npm run deploy` publishes a Worker that serves `dist/`, the AI endpoints and the room Durable Objects (`wrangler.worker.toml`). Multiplayer needs the Worker; the Pages target (`npm run deploy:pages`) only serves the AI endpoints.
 
 ```bash
 export CLOUDFLARE_API_TOKEN=...   # token with Pages: Edit and Workers AI: Read
@@ -57,11 +66,13 @@ npm run deploy
 ## Architecture
 
 ```
-src/sim/      deterministic 60 Hz simulation (no DOM): world, AI, raiders, config
+src/sim/      deterministic 60 Hz simulation (no DOM): world, AI, raiders, config, snapshots
+src/net/      lockstep link: room connection, turn buffer, hash checks, resync
+worker/       Cloudflare Worker: static assets, AI endpoints, Room and Matchmaker Durable Objects
 src/render/   WebGL2 renderer: one instanced SDF sprite shader, bloom chain, particles
 src/ai/       prompt protocol, sandboxed program runner, example programs
 functions/    Cloudflare Pages Function that turns prompts into programs
-src/ui/       HUD and prompt dock (DOM), procedural WebAudio
+src/ui/       HUD, right-click order menu, prompt dock (DOM), procedural WebAudio
 src/game.ts   loop, camera, input, selection, overlay
 ```
 

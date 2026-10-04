@@ -1,5 +1,8 @@
-import { COUNTER, DASH, DT, MAX_UNITS, TEAM_NAMES, Difficulty, FORMATIONS, Formation, NOVA, ROLES, Role, SHIELD, SHIPS, TEAM_COLORS } from './sim/config';
+import { COUNTER, DASH, DT, MAX_UNITS, TEAM_NAMES, Difficulty, FORMATIONS, Formation, NOVA, REPLICATE_MIN, ROLES, Role, SHIELD, SHIPS, TEAM_COLORS } from './sim/config';
+import { ROLE_UNLOCK_BY_ROLE } from './sim/parts';
 import { World, type GameEvent } from './sim/world';
+import type { Link } from './net/link';
+import { ContextMenu } from './ui/context';
 import { Fx } from './render/fx';
 import { Trails } from './render/trails';
 import { Renderer, SpriteBatch } from './render/renderer';
@@ -9,11 +12,15 @@ import { Hud } from './ui/hud';
 
 export interface GameOptions {
   difficulty: Difficulty;
-  rivals: number;
+  teams: number; // total swarms on the map (2-4)
+  humans: number[]; // teams driven by players; the rest are AI
   size: number;
-  seed?: number;
+  seed: number;
+  names?: Record<number, string>;
   demo?: boolean; // attract mode behind the main menu: all AI, no HUD or input
 }
+
+export type EndKind = 'won' | 'lost' | 'over';
 
 export type Action =
   | 'split' | 'merge' | 'replicate' | 'research' | 'stop' | 'dash' | 'shield' | 'nova'
@@ -62,11 +69,21 @@ export class Game {
   private cycleIdx = 0;
   private ended = false;
   private cleanup: (() => void)[] = [];
-  onEnd: ((won: boolean) => void) | null = null;
+  onEnd: ((kind: EndKind) => void) | null = null;
   onPause: ((paused: boolean) => void) | null = null;
+  onNotice: ((text: string) => void) | null = null;
+  /** The team this client controls (-1 = watching only). */
+  readonly me: number;
+  menuOpen = false; // multiplayer menu overlay: the match keeps running underneath
+  readonly context: ContextMenu | null;
+  private targeting: 'split' | 'dash' | null = null;
+  private bgTimer = 0;
 
-  constructor(readonly root: HTMLElement, readonly opts: GameOptions, readonly audio: Audio) {
-    this.world = new World({ seed: opts.seed, size: opts.size, rivals: opts.rivals, difficulty: opts.difficulty });
+  constructor(readonly root: HTMLElement, readonly opts: GameOptions, readonly audio: Audio, readonly link: Link) {
+    this.world = new World({ seed: opts.seed, size: opts.size, teams: opts.teams, humans: opts.humans, difficulty: opts.difficulty });
+    this.me = link.team;
+    this.fx.me = this.me;
+    audio.me = this.me;
     const canvas = document.createElement('canvas');
     canvas.className = 'gl';
     const over = document.createElement('canvas');
@@ -74,33 +91,105 @@ export class Game {
     root.append(canvas, over);
     this.renderer = new Renderer(canvas);
     this.overlay = over.getContext('2d')!;
-    const home = this.world.teams[0];
+    const home = this.world.teams[this.me] ?? { homeX: opts.size / 2, homeY: opts.size / 2 };
     this.cam = { x: home.homeX, y: home.homeY, zoom: 1.1, tx: home.homeX, ty: home.homeY, tzoom: 1.1 };
     this.resize();
     if (opts.demo) {
       this.hud = null;
-      this.world.teams[0].ai = true;
+      this.context = null;
       this.cam.zoom = this.cam.tzoom = 0.7;
     } else {
       this.hud = new Hud(root, this);
+      this.context = new ContextMenu(root, this);
       this.bindInput(canvas);
-      const start = this.world.groupsOf(0)[0];
+      const start = this.world.groupsOf(this.me)[0];
       if (start) this.selected.add(start.id);
+      // Background tabs get no animation frames; keep the lockstep simulation up with the room anyway.
+      this.bgTimer = window.setInterval(() => {
+        if (!document.hidden || this.destroyed) return;
+        this.onEvents(this.advance(0, 240));
+        this.checkEnd();
+      }, 250);
     }
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
+  }
+
+  /** Player or AI name for a team. */
+  teamName(t: number): string {
+    const n = this.opts.names?.[t];
+    if (n) return this.world.teams[t]?.ai ? `${n} (AI)` : n;
+    return TEAM_NAMES[t] ?? 'Raiders';
+  }
+
+  /** Queue orders for my team. They take effect on every client at the same tick. */
+  issue(...cmds: object[]): void {
+    if (this.me < 0 || !this.world.teams[this.me]?.alive) return;
+    this.link.send(cmds);
+  }
+
+  /** Orders that created or replaced a group come back here so the selection can follow them. */
+  private onResult = (cmd: Record<string, unknown>, id: number): void => {
+    const op = cmd.op;
+    if (op === 'split' && cmd.sel && this.selected.has(cmd.id as number)) {
+      if (this.splitFresh !== cmd.batch) { this.splitFresh = cmd.batch as number; this.selected.clear(); }
+      this.selected.add(id);
+    } else if (op === 'merge' || op === 'build') {
+      const src = [...(Array.isArray(cmd.ids) ? cmd.ids : []), cmd.id] as number[];
+      if (src.some((x) => this.selected.has(x))) {
+        for (const x of src) this.selected.delete(x);
+        this.selected.add(id);
+      }
+      if (op === 'build') this.hud?.dock.onBuilt(id);
+    } else if (op === 'design') this.hud?.dock.refreshDesigns();
+  };
+  private splitFresh = -1;
+  skipTicks = 0;
+  private batchId = 0;
+
+  /** Run as many simulation ticks as are due (and allowed by the lockstep link). */
+  private advance(dt: number, cap: number): GameEvent[] {
+    const events: GameEvent[] = [];
+    const w = this.world;
+    const ahead = this.link.ahead(w.tick);
+    this.acc += dt;
+    let budget = Math.floor(this.acc / DT);
+    // Fell behind the room (slow frame, hidden tab): catch up a bit faster than real time.
+    if (Number.isFinite(ahead) && ahead > 18) budget += Math.ceil((ahead - 12) / 4);
+    budget = Math.min(budget, cap, ahead);
+    let steps = 0;
+    while (steps < budget) {
+      if (!this.link.apply(w, this.onResult)) break;
+      w.step();
+      for (const e of w.drainEvents()) events.push(e);
+      if (w.tick % 15 === 0) this.hud?.dock.tick();
+      steps++;
+    }
+    this.acc = Math.max(0, Math.min(DT, this.acc - steps * DT));
+    if (steps < budget || (steps === 0 && this.acc >= DT)) this.acc = Math.min(this.acc, DT * 0.999);
+    this.link.frame(w);
+    return events;
   }
 
   destroy(): void {
     this.destroyed = true;
     this.audio.setIntensity(0);
     cancelAnimationFrame(this.raf);
+    clearInterval(this.bgTimer);
     for (const c of this.cleanup) c();
+    this.link.close();
+    this.context?.destroy();
     this.hud?.destroy();
     this.root.innerHTML = '';
   }
 
+  /** In multiplayer the menu never pauses the match; it only blocks input. */
   setPaused(p: boolean): void {
+    if (this.link.networked) {
+      this.menuOpen = p;
+      this.onPause?.(p);
+      return;
+    }
     if (this.ended) return;
     this.paused = p;
     this.onPause?.(p);
@@ -115,35 +204,34 @@ export class Game {
     this.frameDt = dt;
     this.last = now;
     this.resize();
-    const events: GameEvent[] = [];
-    if (!this.paused) {
+    let events: GameEvent[] = [];
+    if (this.skipTicks > 0) {
+      // Attract mode fast-forwards its opening a slice per frame instead of freezing the page.
+      const n = Math.min(this.skipTicks, 200);
+      for (let k = 0; k < n; k++) this.world.step();
+      this.world.drainEvents();
+      this.skipTicks -= n;
+    } else if (!this.paused) {
       let scale = 1;
       if (this.fx.hitstop > 0) {
         this.fx.hitstop -= dt;
-        scale = 0.12;
+        // Hit-stop is a local slow-motion effect; in lockstep it would only make us fall behind the room.
+        if (!this.link.networked) scale = 0.12;
       }
-      this.acc += dt * scale;
-      let steps = 0;
-      while (this.acc >= DT && steps < 4) {
-        this.world.step();
-        for (const e of this.world.drainEvents()) events.push(e);
-        if (this.world.tick % 15 === 0) this.hud?.dock.tick();
-        this.acc -= DT;
-        steps++;
-      }
-      if (steps === 4) this.acc = 0;
+      events = this.advance(dt * scale, this.link.networked ? 30 : 4);
       this.time += dt;
       this.fx.update(dt * (this.fx.hitstop > 0 ? 0.25 : 1));
     }
     const bounds = this.viewBounds();
     this.fx.handle(events, bounds);
+    if (!this.paused) this.mineDust(dt);
     this.audio.tick(dt);
     if (this.opts.demo) this.directDemoCamera(dt);
     else {
       this.audio.play(events, (x, y) => this.audibility(x, y));
       this.audio.startMusic();
       let fighting = 0;
-      for (const g of this.world.groupsOf(0)) if (g.combatT < 1.5) fighting += g.count;
+      for (const g of this.world.groupsOf(this.me)) if (g.combatT < 1.5) fighting += g.count;
       this.musicIntensity += (Math.min(1, fighting / 120) - this.musicIntensity) * Math.min(1, dt * 0.8);
       this.audio.setIntensity(this.paused ? 0 : this.musicIntensity);
     }
@@ -158,15 +246,18 @@ export class Game {
 
   private onEvents(events: GameEvent[]): void {
     for (const e of events) {
-      if (e.t === 'teamOut' && e.team !== 0) {
+      if (e.t === 'teamOut' && e.n === -1) {
         const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
-        this.hud?.banner(`${TEAM_NAMES[e.team!]} has been eliminated`, `rgb(${c})`);
+        if (e.team !== this.me) this.hud?.banner(`An AI took over ${this.teamName(e.team!).replace(' (AI)', '')}'s swarm`, `rgb(${c})`);
+      } else if (e.t === 'teamOut' && e.team !== this.me) {
+        const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
+        this.hud?.banner(`${this.teamName(e.team!)} has been eliminated`, `rgb(${c})`);
         this.fx.shake(0.3);
       } else if (e.t === 'groupLost') {
-        if (e.team === 0) this.hud?.banner(`Swarm of ${e.n} lost`, '#ff6b5a');
+        if (e.team === this.me) this.hud?.banner(`Swarm of ${e.n} lost`, '#ff6b5a');
         else if (this.onScreen(e.x, e.y) && (e.n ?? 0) >= 40) {
           const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
-          this.hud?.banner(`${TEAM_NAMES[e.team!]} swarm of ${e.n} destroyed`, `rgb(${c})`);
+          this.hud?.banner(`${this.teamName(e.team!)} swarm of ${e.n} destroyed`, `rgb(${c})`);
         }
       }
       if (e.t === 'wave') {
@@ -176,11 +267,30 @@ export class Game {
       }
     }
     // Alert when an off-screen player group is in a fight.
-    for (const g of this.world.groupsOf(0)) {
+    for (const g of this.world.groupsOf(this.me)) {
       if (g.combatT < 0.05 && g.recentLoss > 2 && !this.onScreen(g.cx, g.cy)) {
         if (!this.alerts.some((a) => Math.hypot(a.x - g.cx, a.y - g.cy) < 300 && a.t > 2)) {
           this.alerts.push({ x: g.cx, y: g.cy, t: 4, color: '#ff6b5a', label: 'Under attack' });
         }
+      }
+    }
+  }
+
+  /** Grit drifting off rocks that are being mined (purely visual, so it can use Math.random). */
+  private mineDust(dt: number): void {
+    const w = this.world;
+    for (const g of w.groups) {
+      if (!g.alive || !g.harvesting) continue;
+      const r = w.rocks[g.order.rock];
+      if (!r?.alive || !this.onScreen(r.x, r.y)) continue;
+      const col: [number, number, number] = r.wreck ? [0.95, 0.6, 0.3] : [0.68, 0.64, 0.6];
+      for (let n = Math.min(5, g.count * dt * 0.35); n > 0; n--) {
+        if (Math.random() > n) break;
+        const a = Math.random() * Math.PI * 2;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const out = 15 + Math.random() * 35, tan = (Math.random() - 0.5) * 40;
+        this.fx.spark(r.x + ca * r.r * 0.95, r.y + sa * r.r * 0.95, ca * out - sa * tan, sa * out + ca * tan,
+          0.6 + Math.random() * 0.7, 1 + Math.random() * 1.1, col, 1.2, 0.6 + Math.random() * 0.4);
       }
     }
   }
@@ -215,12 +325,21 @@ export class Game {
     this.cam.tzoom = 0.75 + 0.15 * Math.sin(this.time * 0.1);
   }
 
+  private lostShown = false;
   private checkEnd(): void {
-    if (this.opts.demo) return;
-    if (this.ended || this.world.winner < 0) return;
-    this.ended = true;
-    const won = this.world.winner === 0;
-    setTimeout(() => this.onEnd?.(won), won ? 1200 : 1800);
+    if (this.opts.demo || this.ended) return;
+    const w = this.world;
+    const mine = w.teams[this.me];
+    if (w.winner >= 0) {
+      this.ended = true;
+      const kind: EndKind = w.winner === this.me ? 'won' : this.lostShown || this.me < 0 ? 'over' : 'lost';
+      setTimeout(() => this.onEnd?.(kind), kind === 'won' ? 1200 : 1800);
+    } else if (mine && !mine.alive && !this.lostShown) {
+      // Knocked out while others fight on: offer to keep watching.
+      this.lostShown = true;
+      this.selected.clear();
+      setTimeout(() => this.onEnd?.('lost'), 1800);
+    }
   }
 
   // ------------------------------------------------------------------ camera
@@ -360,7 +479,7 @@ export class Game {
       const g = w.groups[id];
       if (!g?.alive || !this.onScreen(g.cx, g.cy)) continue;
       const [x, y] = this.worldToScreen(g.cx, g.cy - g.radius - 18);
-      const own = g.team === 0;
+      const own = g.team === this.me;
       const col = TEAM_COLORS[g.team] ?? [1, 1, 1];
       const css = `rgb(${col.map((v) => Math.round(v * 255)).join(',')})`;
       let label = `${g.count}`;
@@ -483,7 +602,9 @@ export class Game {
     }
 
     // Context cursor hint.
-    const hint = this.cursorHint();
+    const hint = this.targeting
+      ? [this.targeting === 'split' ? 'Split: click where the new swarm goes' : 'Dash: click a target', '#9fe0ff'] as [string, string]
+      : this.cursorHint();
     if (hint && this.mouse.in && !this.drag) {
       ctx.font = '600 11px "Saira Condensed", "Arial Narrow", sans-serif';
       ctx.textAlign = 'left';
@@ -516,13 +637,13 @@ export class Game {
     if (this.hoverShip >= 0) return ['Attack', '#ff8f7a'];
     if (this.hoverGroup >= 0) {
       const g = this.world.groups[this.hoverGroup];
-      if (g && g.team !== 0) {
+      if (g && g.team !== this.me) {
         const m = this.matchup(g.role);
         if (m > 1.25) return [`Attack · ${ROLES[g.role].name} · favored`, '#8dffa8'];
         if (m < 0.8) return [`Attack · ${ROLES[g.role].name} · countered`, '#ff8f7a'];
         return [`Attack · ${ROLES[g.role].name} · even`, '#ffd48f'];
       }
-      if (g && !this.selected.has(g.id)) return ['Merge', '#9fe0ff'];
+      if (g && !this.selected.has(g.id)) return ['Right-click for orders', '#9fe0ff'];
       return null;
     }
     if (this.hoverRock >= 0) return ['Harvest', '#e8c98f'];
@@ -539,6 +660,11 @@ export class Game {
     on(canvas, 'contextmenu', (e: MouseEvent) => e.preventDefault());
     on(canvas, 'pointerdown', (e: PointerEvent) => {
       this.audio.unlock();
+      this.context?.close();
+      if (this.targeting && (e.button === 0 || e.button === 2)) {
+        this.fireTargeting();
+        return;
+      }
       canvas.setPointerCapture(e.pointerId);
       this.drag = { x: e.offsetX, y: e.offsetY, button: e.button, cx: this.cam.tx, cy: this.cam.ty, moved: false };
       if (e.button === 2) this.drawn = [e.offsetX, e.offsetY];
@@ -570,6 +696,7 @@ export class Game {
         const pts = this.drawn;
         this.drawn = null;
         if (d.moved && pts && pts.length >= 6) this.pathOrder(pts);
+        else if (this.hoverGroup >= 0 && this.world.groups[this.hoverGroup]?.team === this.me) this.openContext(this.hoverGroup);
         else this.rightClick(e.shiftKey);
         return;
       }
@@ -593,11 +720,13 @@ export class Game {
       if (e.target instanceof HTMLInputElement) return;
       this.audio.unlock();
       if (k === 'escape' || k === 'p') {
-        if (k === 'escape' && this.selected.size && !this.paused) { this.selected.clear(); return; }
-        this.setPaused(!this.paused);
+        if (k === 'escape' && this.context?.isOpen) { this.context.close(); return; }
+        if (k === 'escape' && this.targeting) { this.targeting = null; return; }
+        if (k === 'escape' && this.selected.size && !this.paused && !this.menuOpen) { this.selected.clear(); return; }
+        this.setPaused(this.link.networked ? !this.menuOpen : !this.paused);
         return;
       }
-      if (this.paused) return;
+      if (this.paused || this.menuOpen) return;
       if (k === 'enter' || k === '/') { e.preventDefault(); this.hud?.dock.focus(); return; }
       if (k === 'y') { this.hud?.toggleResearch(); return; }
       if ((e.ctrlKey || e.metaKey) && k === 'a') { e.preventDefault(); this.action('selectAll'); return; }
@@ -645,10 +774,10 @@ export class Game {
     const dbl = now - this.lastClick < 300;
     this.lastClick = now;
     const g = this.hoverGroup >= 0 ? this.world.groups[this.hoverGroup] : null;
-    if (g && g.team === 0) {
+    if (g && g.team === this.me) {
       if (dbl) {
         // Double-click: all own groups on screen.
-        for (const o of this.world.groupsOf(0)) if (this.onScreen(o.cx, o.cy)) this.selected.add(o.id);
+        for (const o of this.world.groupsOf(this.me)) if (this.onScreen(o.cx, o.cy)) this.selected.add(o.id);
       } else if (shift) {
         if (this.selected.has(g.id)) this.selected.delete(g.id);
         else this.selected.add(g.id);
@@ -670,7 +799,7 @@ export class Game {
     if (!shift) this.selected.clear();
     const w = this.world;
     for (let i = 0; i < w.hi; i++) {
-      if (!w.ualive[i] || w.uteam[i] !== 0) continue;
+      if (!w.ualive[i] || w.uteam[i] !== this.me) continue;
       const x = w.ux[i], y = w.uy[i];
       if (x >= ax && x <= bx && y >= ay && y <= by) this.selected.add(w.ugroup[i]);
     }
@@ -686,37 +815,64 @@ export class Game {
     const w = this.world;
     const [wx, wy] = this.screenToWorld(this.mouse.x, this.mouse.y);
     if (this.hoverShip >= 0) {
-      w.cmdAttackShip(ids, this.hoverShip);
+      this.issue({ op: 'attackShip', ids, target: this.hoverShip });
       this.ping(wx, wy, '#ff7b6b');
-      this.hud?.notify('attack');
-    } else if (this.hoverGroup >= 0 && w.groups[this.hoverGroup].team !== 0) {
-      w.cmdAttackGroup(ids, this.hoverGroup);
+    } else if (this.hoverGroup >= 0 && w.groups[this.hoverGroup].team !== this.me) {
+      this.issue({ op: 'attack', ids, target: this.hoverGroup });
       this.ping(wx, wy, '#ff7b6b');
-      this.hud?.notify('attack');
     } else if (this.hoverGroup >= 0 && !this.selected.has(this.hoverGroup)) {
-      // Join a friendly group: merge right away if close, otherwise fly over and merge.
-      const target = w.groups[this.hoverGroup];
-      w.cmdMove(ids, target.cx, target.cy);
-      this.pendingMerges.push({ target: target.id, ids });
-      this.ping(target.cx, target.cy, '#9fe0ff');
+      this.joinGroup(this.hoverGroup);
     } else if (this.hoverRock >= 0) {
-      w.cmdHarvest(ids, this.hoverRock);
+      this.issue({ op: 'harvest', ids, rock: this.hoverRock });
       const r = w.rocks[this.hoverRock];
       this.ping(r.x, r.y, '#e8c98f');
-      this.hud?.notify('harvest');
     } else if (shift) {
-      w.cmdQueue(ids, wx, wy);
+      this.issue({ op: 'queue', ids, x: wx, y: wy });
       this.ping(wx, wy, '#7fe3ff');
-      this.hud?.notify('path');
     } else {
-      w.cmdMove(ids, wx, wy);
+      this.issue({ op: 'move', ids, x: wx, y: wy });
       this.ping(wx, wy, '#7fe3ff');
-      this.hud?.notify('move');
     }
     this.audio.ui('order');
   }
 
-  private pendingMerges: { target: number; ids: number[] }[] = [];
+  /** Send the selection over to a friendly swarm and merge when they meet. */
+  joinGroup(target: number): void {
+    const ids = this.selectedIds().filter((id) => id !== target);
+    const t = this.world.groups[target];
+    if (!ids.length || !t?.alive) return;
+    this.issue({ op: 'move', ids, x: t.cx, y: t.cy });
+    this.pendingMerges.push({ target, ids, sent: new Set(), at: performance.now() });
+    this.ping(t.cx, t.cy, '#9fe0ff');
+    this.audio.ui('order');
+  }
+
+  private openContext(id: number): void {
+    if (!this.context) return;
+    const others = this.selectedIds().filter((x) => x !== id);
+    const joinable = !this.selected.has(id) && others.length > 0;
+    if (!this.selected.has(id)) {
+      // Right-clicking a swarm outside the selection targets that swarm (and can absorb the current selection).
+      this.context.open(this.mouse.x, this.mouse.y, [id], joinable ? others : []);
+    } else this.context.open(this.mouse.x, this.mouse.y, this.selectedIds(), []);
+    this.audio.ui('select');
+  }
+
+  /** Split and Dash from the context menu aim with the next click. */
+  startTargeting(kind: 'split' | 'dash', ids: number[]): void {
+    this.selected.clear();
+    for (const id of ids) this.selected.add(id);
+    this.targeting = kind;
+  }
+
+  private fireTargeting(): void {
+    const kind = this.targeting;
+    this.targeting = null;
+    this.drag = null;
+    if (kind) this.action(kind);
+  }
+
+  private pendingMerges: { target: number; ids: number[]; sent: Set<number>; at: number }[] = [];
   private drawn: number[] | null = null; // screen-space polyline while right-dragging
 
   private pathOrder(screenPts: number[]): void {
@@ -739,7 +895,7 @@ export class Game {
       carry = (carry + seg) % step;
     }
     out.push(world[world.length - 2], world[world.length - 1]);
-    this.world.cmdPath(ids, out);
+    this.issue({ op: 'path', ids, points: pairs(out) });
     this.ping(out[out.length - 2], out[out.length - 1], '#7fe3ff');
     this.audio.ui('order');
     this.hud?.notify('path');
@@ -752,14 +908,13 @@ export class Game {
     this.pendingMerges = this.pendingMerges.filter((pm) => {
       const t = w.groups[pm.target];
       if (!t?.alive) return false;
-      const live = pm.ids.filter((id) => w.groups[id]?.alive && w.groups[id].order.type === 'move');
-      if (!live.length) return false;
+      const live = pm.ids.filter((id) => w.groups[id]?.alive && w.groups[id].team === this.me && w.groups[id].order.type === 'move' && !pm.sent.has(id));
+      if (!live.length) return pm.sent.size > 0 && performance.now() - pm.at < 3000 && pm.ids.some((id) => w.groups[id]?.alive && !pm.sent.has(id));
       const ready = live.filter((id) => Math.hypot(w.groups[id].cx - t.cx, w.groups[id].cy - t.cy) < t.radius + w.groups[id].radius + 30);
       if (ready.length) {
-        const keep = w.cmdMerge([t.id, ...ready]);
-        for (const id of ready) this.selected.delete(id);
-        if (keep >= 0 && ready.length) this.selected.add(keep);
-        this.hud?.notify('merge');
+        this.issue({ op: 'merge', ids: [t.id, ...ready] });
+        for (const id of ready) pm.sent.add(id);
+        pm.at = performance.now();
       }
       return live.length > ready.length;
     });
@@ -781,11 +936,11 @@ export class Game {
     let ok = true;
     switch (a) {
       case 'selectAll':
-        for (const g of w.groupsOf(0)) this.selected.add(g.id);
+        for (const g of w.groupsOf(this.me)) this.selected.add(g.id);
         this.audio.ui('select');
         return;
       case 'cycle': {
-        const own = w.groupsOf(0);
+        const own = w.groupsOf(this.me);
         if (!own.length) return;
         this.cycleIdx = (this.cycleIdx + 1) % own.length;
         const g = own[this.cycleIdx];
@@ -807,69 +962,63 @@ export class Game {
       this.audio.ui('error');
       return;
     }
+    const batch = ++this.batchId;
     switch (a) {
-      case 'split': {
-        const fresh: number[] = [];
+      case 'split':
+        // The new halves get selected when the split lands (see onResult).
         for (const id of ids) {
           const g = w.groups[id];
-          const nid = w.cmdSplit(id, mx - g.cx, my - g.cy);
-          if (nid >= 0) fresh.push(nid);
-        }
-        ok = fresh.length > 0;
-        if (ok) {
-          // Select the halves nearest the cursor so they can be sent off immediately.
-          this.selected.clear();
-          for (const id of fresh) this.selected.add(id);
-          this.hud?.notify('split');
+          ok = ok && g.count >= 2;
+          this.issue({ op: 'split', id, dx: mx - g.cx || 1, dy: my - g.cy, sel: true, batch });
         }
         break;
-      }
-      case 'merge': {
+      case 'merge':
         if (ids.length < 2) { ok = false; break; }
-        const keep = w.cmdMerge(ids);
-        this.selected.clear();
-        if (keep >= 0) this.selected.add(keep);
-        this.hud?.notify('merge');
+        this.issue({ op: 'merge', ids });
         break;
-      }
       case 'replicate':
-        ok = w.cmdReplicate(ids);
-        if (ok) this.hud?.notify('replicate');
+        ok = ids.some((id) => w.groups[id].count >= REPLICATE_MIN && !w.groups[id].cells);
+        this.issue({ op: 'replicate', ids });
         break;
       case 'research':
-        w.cmdResearch(ids);
-        this.hud?.notify('research');
+        this.issue({ op: 'research', ids });
         break;
       case 'stop':
-        w.cmdStop(ids);
+        this.issue({ op: 'hold', ids });
         break;
       case 'dash':
-        ok = w.cmdDash(ids, mx, my);
-        if (ok) this.hud?.notify('ability');
+        ok = this.abilityState('dash').energy;
+        this.issue({ op: 'dash', ids, x: mx, y: my });
         break;
       case 'shield':
-        ok = w.cmdShield(ids);
-        if (ok) this.hud?.notify('ability');
+        ok = this.abilityState('shield').energy;
+        this.issue({ op: 'shield', ids });
         break;
       case 'nova':
-        ok = w.cmdNova(ids);
-        if (ok) this.hud?.notify('ability');
+        ok = this.abilityState('nova').energy;
+        this.issue({ op: 'nova', ids });
         break;
       case 'f0': case 'f1': case 'f2': case 'f3':
-        w.cmdFormation(ids, Number(a[1]) as Formation);
-        this.hud?.notify('formation');
+        this.issue({ op: 'formation', ids, name: FORMATIONS[Number(a[1])].name });
         break;
-      case 'm0': case 'm1': case 'm2': case 'm3': case 'm4':
-        w.cmdMorph(ids, Number(a[1]) as Role);
-        this.hud?.notify('morph');
+      case 'm0': case 'm1': case 'm2': case 'm3': case 'm4': {
+        const role = Number(a[1]) as Role;
+        const t = w.teams[this.me];
+        const unlock = ROLE_UNLOCK_BY_ROLE.get(role);
+        if (unlock && !t.unlocked.has(unlock.id)) {
+          ok = false;
+          this.fx.text(w.groups[ids[0]].cx, w.groups[ids[0]].cy - 30, `Research ${unlock.name} first`, '#ff8f7a', 14, 1.6);
+          break;
+        }
+        this.issue({ op: 'morph', ids, role: ROLES[role].name });
         break;
+      }
     }
     this.audio.ui(ok ? 'click' : 'error');
   }
 
   /** For HUD: cooldown fraction 0..1 (1 = ready) and whether affordable, across selection. */
-  abilityState(kind: 'dash' | 'shield' | 'nova'): { ready: number; energy: boolean } {
-    const ids = this.selectedIds();
+  abilityState(kind: 'dash' | 'shield' | 'nova', ids = this.selectedIds()): { ready: number; energy: boolean } {
     let best = 0, energy = false;
     const def = kind === 'dash' ? DASH : kind === 'shield' ? SHIELD : NOVA;
     for (const id of ids) {
@@ -901,4 +1050,10 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
+}
+
+function pairs(flat: number[]): number[][] {
+  const out: number[][] = [];
+  for (let k = 0; k + 1 < flat.length; k += 2) out.push([flat[k], flat[k + 1]]);
+  return out;
 }

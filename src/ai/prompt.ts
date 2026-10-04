@@ -16,7 +16,7 @@ state.home {x,y}; state.selected: ids of groups the player had selected when giv
 state.groups: my swarms [{id,count,x,y,radius,role,formation,order,energy,inCombat,harvesting,ready:{dash,shield,nova}}]
   role: 'drone'|'striker'|'tank'|'harvester'|'artillery'; formation: 'swarm'|'wedge'|'ring'|'line'
   order: 'idle'|'move'|'attack'|'harvest'|'replicate'|'research'
-state.enemies: rival swarms [{id,team,count,x,y,radius,role,order}] team: 'ember'|'verdant'|'umbra'
+state.enemies: rival swarms [{id,team,color,count,x,y,radius,role,order}] team: the rival's name (another player, or a bot like 'ember'), color: 'blue'|'red'|'green'|'purple'. Other swarms may be human players.
 state.ships: hostile raiders [{id,type,x,y,hp,maxHp}] type: 'scout'|'bomber'|'bulwark'|'siege'
 state.rocks: harvestable asteroids [{id,x,y,mass,radius,wreck}]
 state.designs: construct blueprints [{name,units,buildable}]. Groups whose order starts with 'construct:' are constructs (soft-body vehicles).

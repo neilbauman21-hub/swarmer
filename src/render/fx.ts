@@ -36,6 +36,7 @@ export class Fx {
   private beams: Beam[] = [];
   texts: FloatText[] = [];
 
+  me = 0; // local player's team: only their research/failure texts are shown
   trauma = 0; // screen shake, 0..1
   hitstop = 0; // seconds of slowed time remaining
   flash = 0;
@@ -102,10 +103,22 @@ export class Fx {
           if (!inView(e.x, e.y)) break;
           this.spark(e.x, e.y, 0, 0, 0.35, 7, c, 0, 0.7);
           break;
-        case 'harvest':
+        case 'harvest': {
+          // A new unit breaks out of the rock face: chips fly outward and a small ring pops in the team colour.
           if (!inView(e.x, e.y)) break;
-          this.burst(e.x, e.y, 3, 60, 0.4, 2.2, [0.9, 0.8, 0.6], 1.1);
+          const dx = e.x - (e.x2 ?? e.x), dy = e.y - (e.y2 ?? e.y);
+          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          const nx = dx / d, ny = dy / d;
+          const chip: RGB = e.r ? [1, 0.62, 0.3] : [0.85, 0.8, 0.72];
+          for (let k = 0; k < 5; k++) {
+            const sp = 50 + Math.random() * 110, j = (Math.random() - 0.5) * 1.3;
+            const vx = (nx * Math.cos(j) - ny * Math.sin(j)) * sp, vy = (ny * Math.cos(j) + nx * Math.sin(j)) * sp;
+            this.spark(e.x, e.y, vx, vy, 0.35 + Math.random() * 0.35, 1.6 + Math.random() * 1.2, chip, 4, 1);
+          }
+          this.ring(e.x, e.y, 2, 16, 0.3, c, 0.18, 0.8);
+          this.spark(e.x, e.y, 0, 0, 0.25, 8, c, 0, 1.1);
           break;
+        }
         case 'explode': {
           if (!inView(e.x, e.y, 400)) break;
           const r = e.r ?? 40;
@@ -171,10 +184,10 @@ export class Fx {
           break;
         case 'research':
           this.burst(e.x, e.y, 24, 120, 1, 2.5, [0.7, 0.9, 1], 1.4);
-          if (e.team === 0) this.text(e.x, e.y - 30, '+1 Research point', '#9fe0ff', 16, 1.8);
+          if (e.team === this.me) this.text(e.x, e.y - 30, '+1 Research point', '#9fe0ff', 16, 1.8);
           break;
         case 'fail':
-          if (e.team === 0 && e.msg) this.text(e.x, e.y - 20, e.msg, '#ff8f7a', 14, 1.6);
+          if (e.team === this.me && e.msg) this.text(e.x, e.y - 20, e.msg, '#ff8f7a', 14, 1.6);
           break;
         case 'wave':
           break;

@@ -1,4 +1,4 @@
-import { applyCommands, describe, snapshot } from '../ai/protocol';
+import { describe, snapshot } from '../ai/protocol';
 import { EXAMPLES, PLACEHOLDERS } from '../ai/examples';
 import { SwarmSandbox } from '../ai/sandbox';
 import { PART_BY_ID, PRESETS, designUnits, summarize, validateDesign, type Design } from '../sim/parts';
@@ -95,9 +95,12 @@ export class PromptDock {
 
     this.sandbox = new SwarmSandbox({
       onCommands: (cmds) => {
-        const n = applyCommands(this.game.world, 0, cmds);
-        this.applied += n;
-        if (n) this.renderStatus();
+        // Program output is sent like any other order; the simulation validates it on every client.
+        const ok = (cmds as unknown[]).filter((c): c is object => !!c && typeof c === 'object' && (c as { op?: unknown }).op !== 'leave').slice(0, 40);
+        if (!ok.length) return;
+        this.game.issue(...ok);
+        this.applied += ok.length;
+        this.renderStatus();
       },
       onLog: (lines) => this.log(lines),
       onError: (msg) => this.onProgramError(msg),
@@ -131,16 +134,17 @@ export class PromptDock {
   }
 
   private get designs(): Design[] {
-    return this.game.world.teams[0].designs;
+    return this.game.world.teams[this.game.me]?.designs ?? [];
   }
 
   /** Re-render the blueprint cards (presets you can build plus everything designed this match). */
   refreshDesigns(): void {
-    const team = this.game.world.teams[0];
+    const team = this.game.world.teams[this.game.me];
+    if (!team) return;
     const all = [...this.designs, ...PRESETS.filter((p) => !this.designs.some((d) => d.name === p.name))];
     this.designsEl.innerHTML = '';
     if (!all.length) return;
-    const tc = TEAM_COLORS[0];
+    const tc = TEAM_COLORS[this.game.me] ?? TEAM_COLORS[0];
     for (const d of all) {
       const sum = summarize(d);
       const missing = [...new Set(d.cells.map((c) => c.part))].filter((p) => !team.unlocked.has(p)).map((p) => PART_BY_ID.get(p)!.name);
@@ -176,18 +180,21 @@ export class PromptDock {
     // Build from the biggest selected swarm, pooling the others into it if needed.
     const need = designUnits(d);
     ids.sort((a, b) => w.groups[b].count - w.groups[a].count);
-    let src = ids[0];
-    if (w.groups[src].count < need && ids.length > 1) src = w.cmdMerge(ids);
-    const id = w.cmdBuild(src, d);
-    if (id < 0) {
-      this.setStatus('error', `${d.name} needs ${need} units; the selected swarm has ${w.groups[src].count}.`);
+    const pool = ids.reduce((n, id) => n + w.groups[id].count, 0);
+    if (pool < need) {
+      this.setStatus('error', `${d.name} needs ${need} units; the selection has ${pool}.`);
       return;
     }
-    this.game.selected.clear();
-    this.game.selected.add(id);
+    const big = w.groups[ids[0]].count >= need ? [ids[0]] : ids;
+    this.game.issue({ op: 'build', ids: big, design: d.name });
     this.label = d.name;
-    this.setStatus('designed', `Assembling ${d.name}. Right-click a friendly swarm to repair it later.`);
+    this.setStatus('designed', `Assembling ${d.name}…`);
     this.game.audio.ui('order');
+  }
+
+  /** A build order landed: the construct exists now. */
+  onBuilt(_id: number): void {
+    this.setStatus('designed', `Assembled ${this.label}. Merge a friendly swarm into it to repair it.`);
   }
 
   focus(): void {
@@ -203,7 +210,8 @@ export class PromptDock {
     if (!this.sandbox.running) return;
     this.ranFor++;
     if (this.ranFor === 24 && this.applied === 0 && this.aiProgram) this.renderStatus(); // show the "fix it" link
-    this.sandbox.tick(snapshot(this.game.world, 0, this.game.selected));
+    if (!this.game.world.teams[this.game.me]?.alive) return;
+    this.sandbox.tick(snapshot(this.game.world, this.game.me, this.game.selected, this.game.opts.names));
   }
 
   private thinkingSince = 0;
@@ -273,7 +281,7 @@ export class PromptDock {
     this.request = new AbortController();
     this.setStatus('thinking');
     try {
-      const context = describe(snapshot(this.game.world, 0, this.game.selected));
+      const context = describe(snapshot(this.game.world, this.game.me, this.game.selected, this.game.opts.names));
       const res = await fetch('api/swarm', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -294,7 +302,7 @@ export class PromptDock {
   }
 
   private async design(prompt: string): Promise<void> {
-    const team = this.game.world.teams[0];
+    const team = this.game.world.teams[this.game.me];
     try {
       const res = await fetch('api/design', {
         method: 'POST',
@@ -310,15 +318,11 @@ export class PromptDock {
       const v = validateDesign(data.design, team.unlocked);
       if (!v.ok) throw new Error(v.error ?? 'That design did not work.');
       const d = v.design!;
-      // Keep names unique so programs can build by name.
-      let name = d.name, n = 2;
-      while (this.designs.some((x) => x.name === name) || PRESETS.some((x) => x.name === name)) name = `${d.name} ${n++}`;
-      d.name = name;
-      this.designs.unshift(d);
+      // The blueprint joins the team's library through an order, so every client has it (names are made unique there).
+      this.game.issue({ op: 'design', design: d });
       this.codeEl.textContent = `// Blueprint from ${data.model ?? 'AI'}\n${JSON.stringify(d, null, 1)}`;
-      this.refreshDesigns();
-      this.label = name;
-      this.setStatus('designed', `Designed ${name}: ${d.cells.length} cells, costs ${designUnits(d)} units.${v.warnings.length ? ' ' + v.warnings.join('. ') + '.' : ''} Select a swarm and press Build.`);
+      this.label = d.name;
+      this.setStatus('designed', `Designed ${d.name}: ${d.cells.length} cells, costs ${designUnits(d)} units.${v.warnings.length ? ' ' + v.warnings.join('. ') + '.' : ''} Right-click a swarm → Fabricate, or press Build below.`);
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       const msg = err instanceof TypeError ? 'The AI designer isn’t reachable. The ready-made blueprints below still work.' : (err as Error).message;

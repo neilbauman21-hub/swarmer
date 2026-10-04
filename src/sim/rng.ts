@@ -4,6 +4,12 @@ export class Rng {
   constructor(seed = 1) {
     this.s = seed >>> 0 || 1;
   }
+  get state(): number {
+    return this.s;
+  }
+  set state(v: number) {
+    this.s = v >>> 0 || 1;
+  }
   next(): number {
     let t = (this.s = (this.s + 0x6d2b79f5) >>> 0);
     t = Math.imul(t ^ (t >>> 15), t | 1);

@@ -1,3 +1,4 @@
+import { hyp } from './math';
 import { DIFFICULTY, DT, SHIP_TEAM, SHIPS, ShipType } from './config';
 import type { Ship, World } from './world';
 
@@ -16,7 +17,7 @@ export function updateShips(w: World): void {
     }
     // Where to be relative to the target.
     const dx = s.tx - s.x, dy = s.ty - s.y;
-    const d = Math.hypot(dx, dy) || 1;
+    const d = hyp(dx, dy) || 1;
     let keep = 0;
     if (s.type === ShipType.Siege) keep = st.range * 0.85;
     else if (s.type === ShipType.Scout) keep = st.range * 0.6;
@@ -34,18 +35,18 @@ export function updateShips(w: World): void {
     for (const o of ships) {
       if (o === s || !o.alive) continue;
       const ox = s.x - o.x, oy = s.y - o.y;
-      const od = Math.hypot(ox, oy);
+      const od = hyp(ox, oy);
       const min = st.radius + SHIPS[o.type].radius + 20;
       if (od < min && od > 0.01) { wx += (ox / od) * 1.5; wy += (oy / od) * 1.5; }
     }
-    const wl = Math.hypot(wx, wy);
+    const wl = hyp(wx, wy);
     if (wl > 1) { wx /= wl; wy /= wl; }
     const k = Math.min(1, DT * 2);
     s.vx += (wx * st.speed - s.vx) * k;
     s.vy += (wy * st.speed - s.vy) * k;
     s.x = Math.max(30, Math.min(w.size - 30, s.x + s.vx * DT));
     s.y = Math.max(30, Math.min(w.size - 30, s.y + s.vy * DT));
-    const sp = Math.hypot(s.vx, s.vy);
+    const sp = hyp(s.vx, s.vy);
     const face = s.type === ShipType.Siege && sp < st.speed * 0.4 ? Math.atan2(dy, dx) : Math.atan2(s.vy, s.vx);
     let da = face - s.angle;
     while (da > Math.PI) da -= Math.PI * 2;
@@ -66,7 +67,7 @@ export function updateShips(w: World): void {
     s.cd = st.cooldown * (0.85 + w.rng.next() * 0.3);
     const tx = w.ux[target], ty = w.uy[target];
     if (s.type === ShipType.Siege) {
-      const dist = Math.hypot(tx - s.x, ty - s.y);
+      const dist = hyp(tx - s.x, ty - s.y);
       w.shells.push({ x0: s.x, y0: s.y, x1: tx, y1: ty, t: 0, dur: 0.6 + dist / 380, dmg: st.damage, splash: st.splash, team: SHIP_TEAM, big: true, hits: 14, role: -1 });
       w.events.push({ t: 'shellFire', x: s.x, y: s.y, team: SHIP_TEAM, r: 1 });
     } else if (s.type === ShipType.Bulwark) {
@@ -87,7 +88,7 @@ function pickTarget(w: World, s: Ship): void {
   let biggest: { x: number; y: number; n: number } | null = null;
   for (const g of w.groups) {
     if (!g.alive || g.count <= 0) continue;
-    const d = Math.hypot(g.cx - s.x, g.cy - s.y);
+    const d = hyp(g.cx - s.x, g.cy - s.y);
     if (d < 1300 && d < bestScore) { bestScore = d; best = { x: g.cx, y: g.cy }; }
     if (!biggest || g.count > biggest.n) biggest = { x: g.cx, y: g.cy, n: g.count };
   }

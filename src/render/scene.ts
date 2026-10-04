@@ -1,5 +1,6 @@
 import { DT, NOVA, ROLES, Role, SHIELD, SHIPS, SHIP_COLOR } from '../sim/config';
 import type { World } from '../sim/world';
+import { BITE, harvestPhase } from '../sim/math';
 import { Bounds, Fx, teamColor } from './fx';
 import { Shape, SpriteBatch } from './renderer';
 import { TRAIL_LEN, Trails } from './trails';
@@ -85,15 +86,22 @@ export function buildScene(w: World, fx: Fx, view: Bounds, s: SceneState, under:
   for (const r of w.rocks) {
     if (!r.alive || !vis(r.x, r.y, r.r * 1.2)) continue;
     let vein: [number, number, number] = r.wreck ? [1, 0.6, 0.25] : [0.45, 0.75, 1];
-    let veinA = 0.35 + 0.65 * (r.mass / r.maxMass);
+    const left = r.mass / r.maxMass;
+    let veinA = 0.35 + 0.65 * left;
+    let miners = 0;
     for (const g of w.groups) {
       if (g.alive && g.harvesting && g.order.rock === r.id) {
-        vein = teamColor(g.team);
-        veinA = 1.2 + 0.4 * Math.sin(t * 6);
-        break;
+        if (!miners) vein = teamColor(g.team);
+        miners += g.count;
       }
     }
     const rr = r.r * 1.15;
+    if (miners) {
+      // Being mined: veins burn in the miners' colour, brighter the more units are biting, and a heat haze rims the rock.
+      const heat = Math.min(1, miners / 60);
+      veinA = 0.7 + 0.5 * left + heat * 0.5 + 0.25 * Math.sin(t * 7 + r.seed);
+      under.push(r.x, r.y, rr * 1.35, 0, rr * 1.35, Shape.Disk, vein[0], vein[1], vein[2], 0.05 + heat * 0.07);
+    }
     solid.push(r.x, r.y, rr, 0, rr, Shape.Rock, vein[0], vein[1], vein[2], veinA, r.seed, r.wreck ? 1 : 0);
     if (s.hoverRock === r.id) glow.push(r.x, r.y, rr + 10, 0, rr + 10, Shape.Ring, 1, 1, 1, 0.45, 0.04);
   }
@@ -153,6 +161,21 @@ export function buildScene(w: World, fx: Fx, view: Bounds, s: SceneState, under:
     const f = uflash[i];
     if (f > 0) { r += (1 - r) * f; gg += (1 - gg) * f; b += (1 - b) * f; }
     const wdt = Math.max(minW, size);
+    if (g.harvesting) {
+      // Mining cycle: a spark where the unit bites the rock, then an ore mote it carries back out.
+      const rk = w.rocks[g.order.rock];
+      const ph = harvestPhase(w.time + al * DT, w.useed[i]);
+      const ore: [number, number, number] = rk?.wreck ? [1, 0.62, 0.28] : [0.75, 0.9, 1];
+      if (ph >= BITE - 0.03 && ph < BITE + 0.07) {
+        const k = 1 - Math.abs(ph - BITE - 0.02) / 0.05;
+        if (k > 0) glow.push(x, y, 0, 0, wdt * (1.4 + k * 1.6), Shape.Glow, ore[0], ore[1], ore[2], 0.9 * k);
+      } else if (ph >= BITE + 0.07 && ph < 0.82 && rk) {
+        const k = 1 - (ph - BITE - 0.07) / (0.82 - BITE - 0.07);
+        const dx = x - rk.x, dy = y - rk.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        glow.push(x - (dx / d) * wdt * 0.9, y - (dy / d) * wdt * 0.9, 0, 0, Math.max(minW, wdt * 0.55), Shape.Glow, ore[0], ore[1], ore[2], 0.35 + 0.6 * k);
+      }
+    }
     // Curved, fading trail from recent positions.
     if (s.trails && trailBudget > 0 && wdt * s.zoom > 1.4) {
       const n = s.trails.points(i, trailPts);

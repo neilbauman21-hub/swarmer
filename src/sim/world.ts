@@ -1,3 +1,4 @@
+import { harvestLift, harvestPhase, hyp } from './math';
 import {
   CRUISE_MAX, CRUISE_RAMP, DASH, DIFFICULTY, DT, Difficulty, ENERGY_MAX, ENERGY_REGEN, FORMATIONS, Formation,
   GRID_CELL, HARVEST_RATE, MASS_PER_UNIT, MAX_RESEARCH_LEVEL, MAX_UNITS, MORPH_TIME, NOVA, PLAYER_CAP,
@@ -144,7 +145,9 @@ export interface GameEvent {
 export interface WorldOptions {
   seed?: number;
   size?: number;
-  rivals?: number;
+  rivals?: number; // singleplayer-style setup: team 0 human + this many AI teams
+  teams?: number; // total teams (2-4); overrides rivals
+  humans?: number[]; // which teams are human-controlled (default [0])
   difficulty?: Difficulty;
   startUnits?: number;
   waves?: boolean;
@@ -193,6 +196,7 @@ export class World {
   waveNum = 0;
   nextWave = 75;
   winner = -1; // team id once decided
+  aiMem: Record<number, unknown> = {}; // per-team AI memory (kept here so snapshots include it)
 
   constructor(opts: WorldOptions = {}) {
     this.size = opts.size ?? 6000;
@@ -200,27 +204,28 @@ export class World {
     this.difficulty = opts.difficulty ?? Difficulty.Normal;
     this.waves = opts.waves ?? true;
     this.grid = new Grid(this.size, this.size, GRID_CELL, MAX_UNITS);
-    const rivals = Math.max(0, Math.min(3, opts.rivals ?? 2));
-    this.setupMap(rivals, opts.startUnits ?? 60);
+    const total = Math.max(1, Math.min(4, opts.teams ?? 1 + Math.max(0, Math.min(3, opts.rivals ?? 2))));
+    this.setupMap(total, new Set(opts.humans ?? [0]), opts.startUnits ?? 60);
   }
 
   // ---------------------------------------------------------------- setup
 
-  private setupMap(rivals: number, startUnits: number): void {
+  private setupMap(total: number, humans: Set<number>, startUnits: number): void {
     const S = this.size;
     const m = 600;
     const corners = [
       [m, S - m], [S - m, m], [S - m, S - m], [m, m],
     ];
     const diff = DIFFICULTY[this.difficulty];
-    for (let t = 0; t <= rivals; t++) {
+    for (let t = 0; t < total; t++) {
       const [hx, hy] = corners[t];
+      const human = humans.has(t);
       this.teams.push({
-        id: t, alive: true, ai: t !== 0, color: TEAM_COLORS[t], units: 0,
-        cap: t === 0 ? PLAYER_CAP : diff.aiCap, points: 0, pointsEarned: 0, progress: 0,
+        id: t, alive: true, ai: !human, color: TEAM_COLORS[t], units: 0,
+        cap: human ? PLAYER_CAP : diff.aiCap, points: 0, pointsEarned: 0, progress: 0,
         levels: { speed: 0, damage: 0, hull: 0, replication: 0 },
-        // Rivals know every swarm type; the player researches them.
-        unlocked: new Set(t === 0 ? ['drone'] : ['drone', ...ROLE_UNLOCKS.map((r) => r.id)]), designs: [],
+        // AI swarms know every swarm type; humans research them.
+        unlocked: new Set(human ? ['drone'] : ['drone', ...ROLE_UNLOCKS.map((r) => r.id)]), designs: [],
         homeX: hx, homeY: hy, kills: 0, lost: 0, peak: 0, spawned: 0,
       });
       const g = this.createGroup(t, hx, hy);
@@ -240,10 +245,10 @@ export class World {
     while (this.rocks.length < count + this.teams.length && tries++ < 2000) {
       const x = this.rng.range(200, S - 200);
       const y = this.rng.range(200, S - 200);
-      if (this.rocks.some((r) => Math.hypot(r.x - x, r.y - y) < 320)) continue;
-      if (this.teams.some((t) => Math.hypot(t.homeX - x, t.homeY - y) < 300)) continue;
+      if (this.rocks.some((r) => hyp(r.x - x, r.y - y) < 320)) continue;
+      if (this.teams.some((t) => hyp(t.homeX - x, t.homeY - y) < 300)) continue;
       // Richer rocks toward the centre to pull swarms into conflict.
-      const centre = 1 - Math.hypot(x - S / 2, y - S / 2) / (S * 0.7);
+      const centre = 1 - hyp(x - S / 2, y - S / 2) / (S * 0.7);
       this.addRock(x, y, this.rng.range(120, 300) + centre * 350);
     }
   }
@@ -462,7 +467,7 @@ export class World {
     const g = this.groups[id];
     if (!g?.alive || g.cells || g.count < 2) return -1;
     const units = this.unitsOf(g);
-    const len = Math.hypot(dx, dy) || 1;
+    const len = hyp(dx, dy) || 1;
     const nx = dx / len, ny = dy / len;
     units.sort((a, b) => (this.ux[a] - g.cx) * nx + (this.uy[a] - g.cy) * ny - ((this.ux[b] - g.cx) * nx + (this.uy[b] - g.cy) * ny));
     const half = units.slice(Math.floor(units.length / 2));
@@ -564,7 +569,7 @@ export class World {
       return -1;
     }
     const units = this.unitsOf(g).sort((a, b) =>
-      Math.hypot(this.ux[a] - g.cx, this.uy[a] - g.cy) - Math.hypot(this.ux[b] - g.cx, this.uy[b] - g.cy));
+      hyp(this.ux[a] - g.cx, this.uy[a] - g.cy) - hyp(this.ux[b] - g.cx, this.uy[b] - g.cy));
     const cg = this.createGroup(g.team, g.cx, g.cy);
     cg.role = Role.Tank; // constructs count as heavy targets in the counter table
     cg.hx = g.hx; cg.hy = g.hy;
@@ -653,7 +658,7 @@ export class World {
       const g = this.groups[id];
       if (!g || !this.canAct(g) || g.cdDash > 0 || g.energy < DASH.cost) continue;
       let dx = tx - g.cx, dy = ty - g.cy;
-      const d = Math.hypot(dx, dy) || 1;
+      const d = hyp(dx, dy) || 1;
       dx /= d; dy /= d;
       g.energy -= DASH.cost;
       g.cdDash = DASH.cooldown;
@@ -800,14 +805,14 @@ export class World {
       let near = false;
       for (const o of gs) {
         if (o.team === g.team) continue;
-        const d = Math.hypot(o.cx - g.cx, o.cy - g.cy);
+        const d = hyp(o.cx - g.cx, o.cy - g.cy);
         if (d < reach + o.radius + this.rangeOf(o)) { near = true; break; }
       }
       if (!near) {
         for (const s of this.ships) {
           if (!s.alive) continue;
           const st = SHIPS[s.type];
-          if (Math.hypot(s.x - g.cx, s.y - g.cy) < reach + st.range + st.radius) { near = true; break; }
+          if (hyp(s.x - g.cx, s.y - g.cy) < reach + st.range + st.radius) { near = true; break; }
         }
       }
       g.enemyNear = near;
@@ -848,7 +853,7 @@ export class World {
       let best: Group | null = null, bd = reach;
       for (const e of this.groups) {
         if (!e.alive || e.team === g.team || e.count <= 0) continue;
-        const d = Math.hypot(e.cx - g.cx, e.cy - g.cy) - e.radius;
+        const d = hyp(e.cx - g.cx, e.cy - g.cy) - e.radius;
         if (d < bd) { bd = d; best = e; }
       }
       if (best) this.setOrder(g, 'attack', g.ax, g.ay, best.id);
@@ -859,11 +864,11 @@ export class World {
     switch (o.type) {
       case 'move':
         gx = o.x; gy = o.y;
-        if (g.path.length && Math.hypot(g.ax - o.x, g.ay - o.y) < 30 + g.radius * 0.3) {
+        if (g.path.length && hyp(g.ax - o.x, g.ay - o.y) < 30 + g.radius * 0.3) {
           // Flow through waypoints without stopping.
           o.x = g.path.shift()!;
           o.y = g.path.shift()!;
-        } else if (Math.hypot(g.ax - o.x, g.ay - o.y) < 4) o.type = 'idle';
+        } else if (hyp(g.ax - o.x, g.ay - o.y) < 4) o.type = 'idle';
         break;
       case 'attack': {
         let tx = 0, ty = 0, tr = 0, valid = false;
@@ -888,7 +893,7 @@ export class World {
         if (!r?.alive) { this.setOrder(g, 'idle', g.cx, g.cy); break; }
         gx = r.x; gy = r.y;
         stopDist = 0;
-        const d = Math.hypot(g.cx - r.x, g.cy - r.y);
+        const d = hyp(g.cx - r.x, g.cy - r.y);
         if (d < r.r + g.radius + 50) {
           g.harvesting = true;
           const rate = HARVEST_RATE * ROLES[g.role].harvest * (1 + 0.25 * team.levels.replication) * this.growthMult(g.team);
@@ -902,9 +907,14 @@ export class World {
           while (g.progress >= MASS_PER_UNIT) {
             g.progress -= MASS_PER_UNIT;
             const a = this.rng.next() * Math.PI * 2;
-            const u = this.spawnUnit(g, r.x + Math.cos(a) * r.r, r.y + Math.sin(a) * r.r);
+            const ca = Math.cos(a), sa = Math.sin(a);
+            const u = this.spawnUnit(g, r.x + ca * r.r, r.y + sa * r.r, false);
             if (u < 0) { g.progress = 0; break; }
-            this.events.push({ t: 'harvest', x: r.x + Math.cos(a) * r.r, y: r.y + Math.sin(a) * r.r, team: g.team });
+            // Newborn units pop out of the rock face.
+            this.uvx[u] = ca * 140;
+            this.uvy[u] = sa * 140;
+            this.uflash[u] = 1;
+            this.events.push({ t: 'harvest', x: r.x + ca * r.r, y: r.y + sa * r.r, x2: r.x, y2: r.y, team: g.team, r: r.wreck ? 1 : 0 });
           }
           if (r.mass <= 0.5) {
             r.alive = false;
@@ -945,8 +955,8 @@ export class World {
 
     // Move the anchor. It waits for stragglers so the swarm stays cohesive.
     let dx = gx - g.ax, dy = gy - g.ay;
-    const dist = Math.hypot(dx, dy);
-    const lag = Math.hypot(g.cx - g.ax, g.cy - g.ay);
+    const dist = hyp(dx, dy);
+    const lag = hyp(g.cx - g.ax, g.cy - g.ay);
     const moving = dist > stopDist + 2;
     if (moving && g.combatT > 1.5 && g.dashT <= 0) g.cruise = Math.min(CRUISE_RAMP, g.cruise + DT);
     else g.cruise = Math.max(0, g.cruise - DT * 4);
@@ -967,7 +977,7 @@ export class World {
       g.hy += (dy - g.hy) * Math.min(1, DT * turn);
     } else if (o.type === 'attack') {
       // Face the target when holding position.
-      const fx = gx - g.cx, fy = gy - g.cy, fd = Math.hypot(fx, fy) || 1;
+      const fx = gx - g.cx, fy = gy - g.cy, fd = hyp(fx, fy) || 1;
       g.hx += (fx / fd - g.hx) * Math.min(1, DT * 4);
       g.hy += (fy / fd - g.hy) * Math.min(1, DT * 4);
       if (dist < stopDist - 40) {
@@ -977,7 +987,7 @@ export class World {
         g.ay -= (dy / (dist || 1)) * this.speedOf(g) * kite * DT;
       }
     }
-    const hl = Math.hypot(g.hx, g.hy) || 1;
+    const hl = hyp(g.hx, g.hy) || 1;
     g.hx /= hl; g.hy /= hl;
     g.ax = this.clampX(g.ax);
     g.ay = this.clampX(g.ay);
@@ -1027,7 +1037,7 @@ export class World {
       this.uhp[i] = Math.min(this.uhp[i], droneHp);
       slots[k] = -1;
       // Fling the broken piece outward.
-      const dx = this.ux[i] - g.cx, dy = this.uy[i] - g.cy, d = Math.hypot(dx, dy) || 1;
+      const dx = this.ux[i] - g.cx, dy = this.uy[i] - g.cy, d = hyp(dx, dy) || 1;
       this.uvx[i] += (dx / d) * 120;
       this.uvy[i] += (dy / d) * 120;
     }
@@ -1046,7 +1056,7 @@ export class World {
     const units = this.unitsOf(g);
     if (!units.length) return;
     // Sacrifice the units closest to the centre: they collapse into the blast.
-    units.sort((a, b) => Math.hypot(this.ux[a] - g.cx, this.uy[a] - g.cy) - Math.hypot(this.ux[b] - g.cx, this.uy[b] - g.cy));
+    units.sort((a, b) => hyp(this.ux[a] - g.cx, this.uy[a] - g.cy) - hyp(this.ux[b] - g.cx, this.uy[b] - g.cy));
     const n = Math.max(1, Math.floor(units.length * NOVA.sacrifice));
     for (let k = 0; k < n; k++) {
       const i = units[k];
@@ -1095,7 +1105,7 @@ export class World {
     if (team !== SHIP_TEAM) {
       for (const s of this.ships) {
         if (!s.alive) continue;
-        const d = Math.hypot(s.x - x, s.y - y);
+        const d = hyp(s.x - x, s.y - y);
         if (d < r + SHIPS[s.type].radius) this.damageShip(s, dmg * (1 - (1 - edge) * Math.min(1, d / r)) * 1.5, team);
       }
     }
@@ -1179,9 +1189,11 @@ export class World {
         const r = this.rocks[g.order.rock];
         const rx = x - r.x, ry = y - r.y;
         const rd = Math.sqrt(rx * rx + ry * ry) || 1;
-        const band = r.r + 10 + seed * Math.min(70, 6 + Math.sqrt(g.count) * 3);
-        // Orbit the rock: target slightly ahead along the tangent.
-        const tang = 18 + seed * 14;
+        // Mining dives: each unit circles in a band, dives to the surface to bite off ore, then climbs back out.
+        const lift = harvestLift(harvestPhase(time, seed));
+        const band = r.r * 0.92 + 3 + lift * (14 + seed * Math.min(70, 6 + Math.sqrt(g.count) * 3));
+        // Orbit the rock: target slightly ahead along the tangent (slower while grinding at the surface).
+        const tang = (10 + seed * 14) * (0.35 + lift);
         px = r.x + (rx / rd) * band - (ry / rd) * tang;
         py = r.y + (ry / rd) * band + (rx / rd) * tang;
       } else {
@@ -1405,7 +1417,7 @@ export class World {
       if (!s.alive) continue;
       const rr = SHIPS[s.type].radius;
       const dx = s.x - x, dy = s.y - y;
-      const d = Math.max(0, Math.hypot(dx, dy) - rr);
+      const d = Math.max(0, hyp(dx, dy) - rr);
       if (d * d < bestD) { bestD = d * d; best = -k - 2; }
     }
     return best;
@@ -1419,7 +1431,7 @@ export class World {
     const dmg = role.damage * FORMATIONS[g.formation].damage * (1 + 0.2 * team.levels.damage);
     g.combatT = 0;
     if (g.role === Role.Artillery) {
-      const d = Math.hypot(tx - this.ux[i], ty - this.uy[i]);
+      const d = hyp(tx - this.ux[i], ty - this.uy[i]);
       this.shells.push({
         x0: this.ux[i], y0: this.uy[i], x1: tx + this.rng.range(-8, 8), y1: ty + this.rng.range(-8, 8),
         t: 0, dur: 0.35 + d / 420, dmg, splash: role.splash, team: g.team, big: false, hits: ARTILLERY_HITS, role: g.role,
@@ -1445,7 +1457,7 @@ export class World {
     g.combatT = 0;
     const counter = c.part.counter;
     if (c.part.splash > 0) {
-      const d = Math.hypot(tx - this.ux[i], ty - this.uy[i]);
+      const d = hyp(tx - this.ux[i], ty - this.uy[i]);
       this.shells.push({
         x0: this.ux[i], y0: this.uy[i], x1: tx + this.rng.range(-6, 6), y1: ty + this.rng.range(-6, 6),
         t: 0, dur: 0.35 + d / 420, dmg: c.damage, splash: c.part.splash, team: g.team, big: false, hits: ARTILLERY_HITS + 1, role: counter,
@@ -1507,32 +1519,8 @@ export class World {
         if (g.peak >= 25) this.events.push({ t: 'groupLost', x: g.cx, y: g.cy, team: g.team, n: g.peak });
       }
     }
-    if (this.tick % 120 === 0) {
-      this.rocks = this.rocks.filter((r) => r.alive || this.groups.some((g) => g.alive && g.order.rock === r.id));
-      this.reindexRocks();
-      this.ships = this.ships.filter((s) => s.alive || this.groups.some((g) => g.alive && g.order.ship === s.id));
-      this.reindexShips();
-    }
-  }
-
-  private reindexRocks(): void {
-    const map = new Map<number, number>();
-    this.rocks.forEach((r, i) => { map.set(r.id, i); r.id = i; });
-    for (const g of this.groups) {
-      if (g.alive && g.order.rock >= 0) g.order.rock = map.get(g.order.rock) ?? -1;
-      if (g.alive && g.order.type === 'harvest' && g.order.rock < 0) g.order.type = 'idle';
-    }
-  }
-
-  private reindexShips(): void {
-    const map = new Map<number, number>();
-    this.ships.forEach((s, i) => { map.set(s.id, i); s.id = i; });
-    for (const g of this.groups) {
-      if (g.alive && g.order.ship >= 0) g.order.ship = map.get(g.order.ship) ?? -1;
-      if (g.alive && g.order.type === 'attack' && g.order.ship < 0 && g.order.group < 0) g.order.type = 'idle';
-    }
-    // Unit targets referencing ships are re-acquired.
-    for (let i = 0; i < this.hi; i++) if (this.utgt[i] < -1) this.utgt[i] = -1;
+    // Rock and ship ids are stable for the whole match (they are array indices and dead entries stay),
+    // so orders, AI memory and LLM programs can safely remember them.
   }
 
   addShip(type: number, x: number, y: number): Ship {
@@ -1553,10 +1541,68 @@ export class World {
         this.events.push({ t: 'teamOut', x: t.homeX, y: t.homeY, team: t.id });
       }
     }
-    if (this.winner >= 0) return;
-    const player = this.teams[0];
-    if (!player.alive) { this.winner = this.teams.find((t) => t.alive)?.id ?? 99; return; }
-    if (this.teams.length > 1 && this.teams.every((t) => t.id === 0 || !t.alive)) this.winner = 0;
+    if (this.winner >= 0 || this.teams.length < 2) return;
+    const alive = this.teams.filter((t) => t.alive);
+    if (alive.length <= 1) this.winner = alive[0]?.id ?? 99;
+  }
+
+  /** A human left the match: an AI takes over their swarm (applied as a lockstep command, so everyone agrees). */
+  handOver(team: number): void {
+    const t = this.teams[team];
+    if (!t || t.ai) return;
+    t.ai = true;
+    t.cap = DIFFICULTY[this.difficulty].aiCap;
+    for (const r of ROLE_UNLOCKS) t.unlocked.add(r.id);
+    this.events.push({ t: 'teamOut', x: t.homeX, y: t.homeY, team, n: -1 });
+  }
+
+  /** Full simulation state as plain JSON-safe data (unit arrays are trimmed to the high-water mark). */
+  serialize(): Record<string, unknown> {
+    const out: Record<string, unknown> = { $v: SNAPSHOT_VERSION };
+    for (const k of Object.keys(this)) {
+      if (k === 'grid' || k === 'events') continue;
+      const v = (this as unknown as Record<string, unknown>)[k];
+      if (k === 'rng') out.rng = this.rng.state;
+      else if (ArrayBuffer.isView(v) && (v as Float32Array).length === MAX_UNITS) out[k] = encode((v as Float32Array).subarray(0, this.hi));
+      else out[k] = encode(v);
+    }
+    return out;
+  }
+
+  /** Replace this world's state with a snapshot produced by serialize() (same size/options). */
+  restore(snap: Record<string, unknown>): void {
+    if (snap.$v !== SNAPSHOT_VERSION) throw new Error('Snapshot version mismatch');
+    const self = this as unknown as Record<string, unknown>;
+    for (const k of Object.keys(snap)) {
+      if (k === '$v' || k === 'grid' || k === 'events' || !(k in self)) continue;
+      if (k === 'rng') { this.rng.state = snap.rng as number; continue; }
+      const cur = self[k];
+      const val = decode(snap[k]);
+      if (ArrayBuffer.isView(cur) && (cur as Float32Array).length === MAX_UNITS) {
+        const arr = cur as Float32Array;
+        arr.fill(k === 'utgt' || k === 'uslot' ? -1 : 0);
+        arr.set(val as Float32Array);
+      } else if (k !== 'size' && k !== 'difficulty') self[k] = val;
+    }
+    this.events = [];
+    this.grid.build(this.ux, this.uy, this.ualive, this.hi);
+  }
+
+  /** Cheap checksum of the simulation state, compared between peers to detect desyncs. */
+  hash(): number {
+    let h = (this.tick * 2654435761) >>> 0;
+    const mix = (v: number) => { h = Math.imul(h ^ (v | 0), 16777619) >>> 0; };
+    mix(this.rng.state);
+    mix(this.hi);
+    for (let i = 0; i < this.hi; i += 1) {
+      if (!this.ualive[i]) continue;
+      mix(Math.round(this.ux[i] * 16));
+      mix(Math.round(this.uy[i] * 16));
+      mix(Math.round(this.uhp[i] * 16));
+    }
+    for (const t of this.teams) { mix(t.units); mix(t.points); }
+    for (const s of this.ships) if (s.alive) { mix(Math.round(s.x)); mix(Math.round(s.hp)); }
+    return h;
   }
 
   clampX(v: number): number {
@@ -1599,7 +1645,7 @@ export function shapeProject(ox: number, oy: number, hx: number, hy: number, n: 
   switch (f) {
     case Formation.Swarm: {
       const R = Math.sqrt(area / Math.PI) * (0.55 + seed * 0.5);
-      const d = Math.hypot(u, v);
+      const d = hyp(u, v);
       if (d > R) { u *= R / d; v *= R / d; }
       // Mild pull inward keeps the cloud dense.
       u *= 0.9; v *= 0.9;
@@ -1609,7 +1655,7 @@ export function shapeProject(ox: number, oy: number, hx: number, hy: number, n: 
       // Annulus with inner radius ~0.65 of outer, sized for the unit area.
       const ro = Math.sqrt(area / (Math.PI * (1 - 0.42))) + 12;
       const ri = ro * 0.65;
-      const d = Math.hypot(u, v) || 0.001;
+      const d = hyp(u, v) || 0.001;
       const target = Math.max(ri, Math.min(ro, d));
       const want = d < ri ? ri + (ro - ri) * seed : target;
       u = (u / d) * want; v = (v / d) * want;
@@ -1636,5 +1682,47 @@ export function shapeProject(ox: number, oy: number, hx: number, hy: number, n: 
   }
   out[0] = u * hx - v * hy;
   out[1] = u * hy + v * hx;
+  return out;
+}
+
+const SNAPSHOT_VERSION = 1;
+
+type Enc = unknown;
+function encode(v: unknown): Enc {
+  if (v === null || typeof v === 'string' || typeof v === 'boolean') return v;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : { $n: String(v) };
+  if (v === undefined) return { $u: 1 };
+  if (v instanceof Set) return { $set: [...v].map(encode) };
+  if (ArrayBuffer.isView(v)) {
+    const u8 = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+    let bin = '';
+    for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+    return { $ta: v.constructor.name, d: btoa(bin) };
+  }
+  if (Array.isArray(v)) return v.map(encode);
+  const o: Record<string, Enc> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) o[k] = encode(x);
+  return o;
+}
+
+const TYPED: Record<string, new (b: ArrayBuffer) => ArrayBufferView> = {
+  Float32Array, Float64Array, Int32Array, Int16Array, Int8Array, Uint8Array, Uint16Array, Uint32Array,
+};
+
+function decode(v: Enc): unknown {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map(decode);
+  const o = v as Record<string, unknown>;
+  if ('$n' in o) return Number(o.$n);
+  if ('$u' in o) return undefined;
+  if ('$set' in o) return new Set((o.$set as Enc[]).map(decode));
+  if ('$ta' in o) {
+    const bin = atob(o.d as string);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return new TYPED[o.$ta as string](u8.buffer);
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(o)) out[k] = decode(x);
   return out;
 }
