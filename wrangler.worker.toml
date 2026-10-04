@@ -1,0 +1,11 @@
+# Deploy as a Worker with static assets: npx wrangler deploy -c wrangler.worker.toml
+name = "swarmer"
+main = "worker/index.ts"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+[ai]
+binding = "AI"
