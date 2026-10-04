@@ -245,6 +245,7 @@ export class Game {
   };
 
   private onEvents(events: GameEvent[]): void {
+    if (this.opts.demo) return;
     for (const e of events) {
       if (e.t === 'teamOut' && e.n === -1) {
         const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');

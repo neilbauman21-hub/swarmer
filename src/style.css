@@ -411,3 +411,6 @@ kbd {
 .ctx-row.roles button { min-width: 0; flex-basis: 30%; }
 .ctx-empty { font-size: 11px; color: var(--dim); padding: 4px 2px; flex-basis: 100%; }
 .ctx-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); display: flex; }
+.mi { white-space: nowrap; }
+.mi small { white-space: normal; text-align: right; max-width: 52%; line-height: 1.25; }
+.mi.join small { max-width: none; text-align: left; white-space: nowrap; }
