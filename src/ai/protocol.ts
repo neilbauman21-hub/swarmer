@@ -55,8 +55,7 @@ const round = (v: number) => Math.round(v);
 
 const COLOR_NAMES = ['blue', 'red', 'green', 'purple'];
 
-/** names: player names by team in multiplayer (bots keep their swarm names). */
-export function snapshot(w: World, team: number, selected: Iterable<number>, names: Record<number, string> = {}): SwarmState {
+export function snapshot(w: World, team: number, selected: Iterable<number>): SwarmState {
   const t = w.teams[team];
   const groups: SwarmState['groups'] = [];
   const enemies: SwarmState['enemies'] = [];
@@ -71,7 +70,7 @@ export function snapshot(w: World, team: number, selected: Iterable<number>, nam
       });
     } else {
       enemies.push({
-        id: g.id, team: (names[g.team] ?? TEAM_NAMES[g.team]).toLowerCase(), color: COLOR_NAMES[g.team] ?? 'white', count: g.count, x: round(g.cx), y: round(g.cy),
+        id: g.id, team: (w.teams[g.team]?.name ?? TEAM_NAMES[g.team] ?? 'raiders').toLowerCase(), color: COLOR_NAMES[g.team] ?? 'white', count: g.count, x: round(g.cx), y: round(g.cy),
         radius: round(g.radius), role: ROLE_NAMES[g.role], order: g.order.type,
       });
     }
@@ -216,4 +215,18 @@ export function describe(s: SwarmState): string {
   return `t=${s.time}s, map ${s.mapSize}x${s.mapSize}, home (${s.home.x},${s.home.y}), ${s.units} units, ${s.points} research points. ` +
     `Selected: [${s.selected.join(',')}]. My groups: ${mine || 'none'}. Enemies: ${foes || 'none visible'}. ` +
     `${s.ships.length} raider ships, ${s.rocks.length} rocks.`;
+}
+
+/**
+ * Apply one order from a lockstep turn. Orders are tagged with the player id that sent them; the world
+ * decides which swarm (if any) that player drives. join/leave come from the arena server only.
+ */
+export function applyTurn(w: World, pid: number, cmd: unknown, onResult?: ResultFn): void {
+  if (!cmd || typeof cmd !== 'object') return;
+  const c = cmd as Record<string, unknown>;
+  if (c.op === 'join') { w.joinPlayer(pid, String(c.name ?? '').slice(0, 16)); return; }
+  if (c.op === 'leave') { w.leavePlayer(pid); return; }
+  if (c.op === 'respawn') { w.respawnPlayer(pid); return; }
+  const team = w.teamOfPlayer(pid);
+  if (team >= 0 && w.teams[team].alive) applyCommands(w, team, [c], 1, onResult);
 }

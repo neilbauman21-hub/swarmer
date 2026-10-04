@@ -1,5 +1,5 @@
 import { hyp } from './math';
-import { DIFFICULTY, DT, SHIP_TEAM, SHIPS, ShipType } from './config';
+import { ARENA, DIFFICULTY, DT, SHIP_TEAM, SHIPS, ShipType } from './config';
 import type { Ship, World } from './world';
 
 /** Hostile raider ships: they hunt every swarm, including the AI rivals. */
@@ -121,15 +121,17 @@ const UNLOCK = [0, 1, 3, 2];
 export function updateWaves(w: World): void {
   if (w.time < w.nextWave) return;
   const scale = DIFFICULTY[w.difficulty].waveScale;
-  let budget = Math.round((2 + w.waveNum * 1.7) * scale);
-  w.nextWave = w.time + Math.max(38, 62 - w.waveNum * 1.5);
+  // In the endless arena raids stop escalating, otherwise they would eventually wipe everything.
+  const lvl = w.arena ? Math.min(w.waveNum, ARENA.waveCap) : w.waveNum;
+  let budget = Math.round((2 + lvl * 1.7) * scale);
+  w.nextWave = w.time + Math.max(38, 62 - lvl * 1.5);
   const side = w.rng.int(0, 3);
   const along = w.rng.range(0.2, 0.8) * w.size;
   const m = 60;
   const sx = side === 0 ? along : side === 1 ? w.size - m : side === 2 ? along : m;
   const sy = side === 0 ? m : side === 1 ? along : side === 2 ? w.size - m : along;
   let n = 0;
-  const available = [0, 1, 2, 3].filter((t) => UNLOCK[t] <= w.waveNum);
+  const available = [0, 1, 2, 3].filter((t) => UNLOCK[t] <= lvl);
   while (budget > 0 && n < 24) {
     const affordable = available.filter((t) => COST[t] <= budget);
     if (!affordable.length) break;

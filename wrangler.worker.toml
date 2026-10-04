@@ -14,10 +14,14 @@ binding = "AI"
 
 [durable_objects]
 bindings = [
-  { name = "ROOMS", class_name = "Room" },
-  { name = "MATCHMAKER", class_name = "Matchmaker" },
+  { name = "ARENA", class_name = "Arena" },
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room", "Matchmaker"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Arena"]
+deleted_classes = ["Room", "Matchmaker"]

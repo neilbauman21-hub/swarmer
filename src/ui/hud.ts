@@ -1,7 +1,7 @@
 import { SHIPS, TEAM_COLORS } from '../sim/config';
 import type { Game } from '../game';
 import { PromptDock } from './prompt';
-import { PARTS, PART_BY_ID, ROLE_UNLOCKS, type PartDef } from '../sim/parts';
+import { PARTS, PART_BY_ID, type PartDef } from '../sim/parts';
 
 /**
  * Minimal HUD: a slim status line, rival list, minimap, and the prompt dock as the main control.
@@ -17,6 +17,7 @@ export class Hud {
   private miniCtx: CanvasRenderingContext2D;
   private acc = 0;
   private knownUnlocks = 0;
+  private respawnEl: HTMLDivElement;
   private miniAcc = 0;
   readonly dock: PromptDock;
 
@@ -34,7 +35,11 @@ export class Hud {
     this.miniCtx = this.mini.getContext('2d')!;
     this.bindMinimap();
     this.banners = div('banners');
-    el.append(this.stats, this.teams, this.research, this.mini, this.banners);
+    this.respawnEl = div('respawn');
+    this.respawnEl.hidden = true;
+    this.respawnEl.innerHTML = '<div class="rs-k">Signal lost</div><div class="rs-t">SWARM DESTROYED</div><p class="rs-s"></p><button type="button" class="rs-b">Redeploy <kbd>Space</kbd></button>';
+    this.respawnEl.querySelector('button')!.addEventListener('click', () => this.game.respawn());
+    el.append(this.stats, this.teams, this.research, this.mini, this.banners, this.respawnEl);
     this.dock = new PromptDock(el, game);
     this.update(1);
   }
@@ -63,9 +68,7 @@ export class Hud {
     const node = (id: string, name: string, blurb: string, cost: number, tint: number[], req = '') =>
       `<button class="node" data-part="${id}" title="${req}${blurb}"><i style="background:rgb(${tint.map((v) => Math.round(v * 255)).join(',')})"></i><b>${name}</b><small>${blurb}</small><span class="cost">${cost} pt${cost > 1 ? 's' : ''}</span></button>`;
     let html = '<div class="panel-title">Research <span class="pts"></span></div><div class="progress"><div></div></div>';
-    html += '<div class="tree-head">Swarm types <small>whole swarms morph into these (keys 2–5)</small></div><div class="tier">';
-    for (const r of ROLE_UNLOCKS) html += node(r.id, r.name, r.blurb, r.cost, r.tint);
-    html += '</div><div class="tree-head">Construct parts <small>describe a construct in the Fabrication tab</small></div><div class="tree">';
+    html += '<div class="tree-head">Particle types <small>parts for constructs: describe one in the Fabrication tab. Swarm morphs are always available.</small></div><div class="tree">';
     tiers.forEach((tier, i) => {
       html += `<div class="tier"><div class="tier-label">TIER ${i + 1}</div>`;
       for (const p of tier) {
@@ -99,8 +102,7 @@ export class Hud {
     this.research.querySelectorAll<HTMLButtonElement>('.node').forEach((b) => {
       const id = b.dataset.part!;
       const part = PART_BY_ID.get(id);
-      const role = ROLE_UNLOCKS.find((r) => r.id === id);
-      const cost = part?.cost ?? role?.cost ?? 1;
+      const cost = part?.cost ?? 1;
       const owned = team.unlocked.has(id);
       const ready = !owned && (part ? part.requires.every((r) => team.unlocked.has(r)) : true);
       if (owned) b.classList.remove('pending');
@@ -135,22 +137,37 @@ export class Hud {
     this.acc = 0;
     const w = this.game.world;
     const me = w.teams[this.game.me] ?? { units: 0, points: 0 };
-    const t = Math.floor(w.time);
     const link = this.game.link as { rtt?: number; networked: boolean };
     const net = link.networked ? `<div class="st"><span>Ping</span><b>${Math.round(link.rtt ?? 0)}ms</b></div>` : '';
     const next = Math.max(0, Math.ceil(w.nextWave - w.time));
+    const pilots = w.teams.filter((tm) => tm.owner >= 0).length;
     this.stats.innerHTML = `<div class="st"><span>Units</span><b class="units">${me.units}</b></div>
-      <div class="st"><span>Sector time</span><b>${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}</b></div>
+      <div class="st"><span>Kills</span><b>${'kills' in me ? me.kills : 0}</b></div>
       <div class="st warn"><span>Next raid</span><b>${next}s</b></div>
-      <div class="st"><span>Research</span><b class="${me.points ? 'pts' : ''}">${me.points}</b></div>${net}`;
-    let html = '';
+      <div class="st"><span>Research</span><b class="${me.points ? 'pts' : ''}">${me.points}</b></div>
+      <div class="st"><span>Pilots</span><b>${pilots}</b></div>${net}`;
+    // Leaderboard: biggest living swarms first.
+    let html = '<div class="lb-h">Arena</div>';
     const total = w.teams.reduce((n, tm) => n + (tm.alive ? tm.units : 0), 0);
-    for (const tm of w.teams) {
+    const ranked = w.teams.filter((tm) => tm.alive || tm.id === this.game.me).sort((a, b) => b.units - a.units);
+    for (const tm of ranked) {
       const c = TEAM_COLORS[tm.id].map((v) => Math.round(v * 255)).join(',');
       const share = tm.alive ? Math.min(100, (100 * tm.units) / Math.max(1, total)) : 0;
       const you = tm.id === this.game.me ? ' you' : '';
-      const name = esc(this.game.teamName(tm.id)) + (you ? ' <em>you</em>' : '');
-      html += `<div class="team${you} ${tm.alive ? '' : 'dead'}" style="--c:rgb(${c})"><span>${name}</span><b>${tm.alive ? tm.units : 'Destroyed'}</b><i style="width:${share}%"></i></div>`;
+      const bot = tm.owner < 0 ? ' <small>bot</small>' : '';
+      const name = esc(this.game.teamName(tm.id)) + (you ? ' <em>you</em>' : bot);
+      html += `<div class="team${you} ${tm.alive ? '' : 'dead'}" style="--c:rgb(${c})"><span>${name}</span><b>${tm.alive ? tm.units : 'Down'}</b><i style="width:${share}%"></i></div>`;
+    }
+    // Wiped out: offer a fresh swarm.
+    const mine = w.teams[this.game.me];
+    const down = !!mine && !mine.alive;
+    this.respawnEl.hidden = !down;
+    if (down) {
+      const wait = Math.max(0, Math.ceil(2 - (w.time - mine.deadAt)));
+      this.respawnEl.querySelector('.rs-s')!.textContent = `Peak ${mine.peak} units · ${mine.kills} kills. The arena fights on.`;
+      const b = this.respawnEl.querySelector<HTMLButtonElement>('.rs-b')!;
+      b.disabled = wait > 0;
+      b.innerHTML = wait > 0 ? `Redeploy in ${wait}s` : 'Redeploy <kbd>Space</kbd>';
     }
     this.teams.innerHTML = html;
     if (!this.research.classList.contains('hidden')) this.refreshResearch();

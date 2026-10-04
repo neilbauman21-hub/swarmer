@@ -1,5 +1,5 @@
-import { DASH, FORMATIONS, NOVA, REPLICATE_MIN, ROLES, Role, SHIELD } from '../sim/config';
-import { PRESETS, ROLE_UNLOCK_BY_ROLE, designUnits } from '../sim/parts';
+import { DASH, FORMATIONS, NOVA, REPLICATE_MIN, ROLES, SHIELD } from '../sim/config';
+import { PRESETS, designUnits } from '../sim/parts';
 import type { Action, Game } from '../game';
 
 /**
@@ -78,12 +78,8 @@ export class ContextMenu {
     if (swarms.length) {
       html += '<div class="ctx-sec">Morph</div><div class="ctx-row roles">';
       ROLES.forEach((r, i) => {
-        const unlock = ROLE_UNLOCK_BY_ROLE.get(i as Role);
-        const locked = !!unlock && !team.unlocked.has(unlock.id);
         const current = swarms.every((x) => x.role === i);
-        html += btn(locked ? 'tree' : `m${i}`, r.name, String(i + 1), {
-          cls: `${locked ? 'locked' : ''} ${current ? 'cur' : ''}`, note: locked ? `research · ${unlock!.cost} pt${unlock!.cost > 1 ? 's' : ''}` : current ? 'current' : '',
-        });
+        html += btn(`m${i}`, r.name, String(i + 1), { cls: current ? 'cur' : '', note: current ? 'current' : '' });
       });
       html += '</div>';
 

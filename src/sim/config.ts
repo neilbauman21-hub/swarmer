@@ -129,9 +129,26 @@ export const TEAM_COLORS: [number, number, number][] = [
   [1.0, 0.42, 0.32], // coral
   [0.72, 1.0, 0.36], // lime
   [0.85, 0.45, 1.0], // violet
+  [1.0, 0.45, 0.72], // rose
+  [0.42, 0.55, 1.0], // cobalt
+  [0.92, 0.95, 1.0], // pearl
+  [0.3, 1.0, 0.72], // mint
 ];
 export const SHIP_COLOR: [number, number, number] = [1.0, 0.78, 0.3];
-export const TEAM_NAMES = ['You', 'Ember', 'Verdant', 'Umbra'];
+export const TEAM_NAMES = ['You', 'Ember', 'Verdant', 'Umbra', 'Rosa', 'Cobalt', 'Pearl', 'Mint'];
+export const BOT_NAMES = ['Cyan', 'Ember', 'Verdant', 'Umbra', 'Rosa', 'Cobalt', 'Pearl', 'Mint'];
+
+/** The persistent multiplayer arena: one endless map, players drop in and out, bots keep it busy. */
+export const ARENA = {
+  size: 9000,
+  slots: 8, // swarms on the map at most (team ids 0..7)
+  minSwarms: 5, // bots respawn while fewer swarms than this are alive
+  botRespawn: 20, // seconds a dead bot slot stays empty
+  playerCap: 1100,
+  botCap: 750,
+  waveCap: 8, // raids stop escalating past this wave
+  startUnits: 60,
+};
 export const SHIP_TEAM = 255;
 
 export enum ShipType {

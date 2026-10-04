@@ -211,7 +211,7 @@ export class PromptDock {
     this.ranFor++;
     if (this.ranFor === 24 && this.applied === 0 && this.aiProgram) this.renderStatus(); // show the "fix it" link
     if (!this.game.world.teams[this.game.me]?.alive) return;
-    this.sandbox.tick(snapshot(this.game.world, this.game.me, this.game.selected, this.game.opts.names));
+    this.sandbox.tick(snapshot(this.game.world, this.game.me, this.game.selected));
   }
 
   private thinkingSince = 0;
@@ -281,7 +281,7 @@ export class PromptDock {
     this.request = new AbortController();
     this.setStatus('thinking');
     try {
-      const context = describe(snapshot(this.game.world, this.game.me, this.game.selected, this.game.opts.names));
+      const context = describe(snapshot(this.game.world, this.game.me, this.game.selected));
       const res = await fetch('api/swarm', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

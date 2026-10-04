@@ -1,5 +1,4 @@
 import { COUNTER, DASH, DT, MAX_UNITS, TEAM_NAMES, Difficulty, FORMATIONS, Formation, NOVA, REPLICATE_MIN, ROLES, Role, SHIELD, SHIPS, TEAM_COLORS } from './sim/config';
-import { ROLE_UNLOCK_BY_ROLE } from './sim/parts';
 import { World, type GameEvent } from './sim/world';
 import type { Link } from './net/link';
 import { ContextMenu } from './ui/context';
@@ -11,16 +10,15 @@ import type { Audio } from './ui/audio';
 import { Hud } from './ui/hud';
 
 export interface GameOptions {
-  difficulty: Difficulty;
-  teams: number; // total swarms on the map (2-4)
-  humans: number[]; // teams driven by players; the rest are AI
-  size: number;
   seed: number;
-  names?: Record<number, string>;
+  arena?: boolean; // the endless multiplayer arena
+  difficulty?: Difficulty;
+  teams?: number; // non-arena worlds (attract mode): total swarms
+  humans?: number[];
+  size?: number;
   demo?: boolean; // attract mode behind the main menu: all AI, no HUD or input
+  init?: (w: World) => void; // e.g. load the arena snapshot before the first frame
 }
-
-export type EndKind = 'won' | 'lost' | 'over';
 
 export type Action =
   | 'split' | 'merge' | 'replicate' | 'research' | 'stop' | 'dash' | 'shield' | 'nova'
@@ -67,23 +65,20 @@ export class Game {
   private alerts: Ping[] = [];
   private lastClick = 0;
   private cycleIdx = 0;
-  private ended = false;
   private cleanup: (() => void)[] = [];
-  onEnd: ((kind: EndKind) => void) | null = null;
   onPause: ((paused: boolean) => void) | null = null;
   onNotice: ((text: string) => void) | null = null;
-  /** The team this client controls (-1 = watching only). */
-  readonly me: number;
+  /** The team this client controls (-1 = not deployed yet, or watching). Changes when the player joins. */
+  me = -1;
   menuOpen = false; // multiplayer menu overlay: the match keeps running underneath
   readonly context: ContextMenu | null;
   private targeting: 'split' | 'dash' | null = null;
   private bgTimer = 0;
 
   constructor(readonly root: HTMLElement, readonly opts: GameOptions, readonly audio: Audio, readonly link: Link) {
-    this.world = new World({ seed: opts.seed, size: opts.size, teams: opts.teams, humans: opts.humans, difficulty: opts.difficulty });
-    this.me = link.team;
-    this.fx.me = this.me;
-    audio.me = this.me;
+    this.world = new World({ seed: opts.seed, arena: opts.arena, size: opts.size, teams: opts.teams, humans: opts.humans, difficulty: opts.difficulty });
+    opts.init?.(this.world);
+    this.syncMe();
     const canvas = document.createElement('canvas');
     canvas.className = 'gl';
     const over = document.createElement('canvas');
@@ -91,7 +86,7 @@ export class Game {
     root.append(canvas, over);
     this.renderer = new Renderer(canvas);
     this.overlay = over.getContext('2d')!;
-    const home = this.world.teams[this.me] ?? { homeX: opts.size / 2, homeY: opts.size / 2 };
+    const home = this.world.teams[this.me] ?? { homeX: this.world.size / 2, homeY: this.world.size / 2 };
     this.cam = { x: home.homeX, y: home.homeY, zoom: 1.1, tx: home.homeX, ty: home.homeY, tzoom: 1.1 };
     this.resize();
     if (opts.demo) {
@@ -108,18 +103,42 @@ export class Game {
       this.bgTimer = window.setInterval(() => {
         if (!document.hidden || this.destroyed) return;
         this.onEvents(this.advance(0, 240));
-        this.checkEnd();
+        this.syncMe();
       }, 250);
     }
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
   }
 
-  /** Player or AI name for a team. */
+  /** Player or bot name for a team. */
   teamName(t: number): string {
-    const n = this.opts.names?.[t];
-    if (n) return this.world.teams[t]?.ai ? `${n} (AI)` : n;
-    return TEAM_NAMES[t] ?? 'Raiders';
+    return this.world.teams[t]?.name ?? TEAM_NAMES[t] ?? 'Raiders';
+  }
+
+  /** Follow which swarm is mine (it appears when my join order lands, and keeps its slot on respawn). */
+  private syncMe(): void {
+    const me = this.world.teamOfPlayer(this.link.pid);
+    if (me === this.me) return;
+    this.me = me;
+    this.fx.me = me;
+    this.audio.me = me;
+    if (me >= 0) this.onDeployed();
+  }
+
+  private onDeployed(): void {
+    const t = this.world.teams[this.me];
+    if (!t?.alive) return;
+    this.selected.clear();
+    for (const g of this.world.groupsOf(this.me)) this.selected.add(g.id);
+    this.cam.tx = this.cam.x = t.homeX;
+    this.cam.ty = this.cam.y = t.homeY;
+    this.hud?.dock.refreshDesigns();
+  }
+
+  /** Back into the arena with a fresh swarm after being wiped out. */
+  respawn(): void {
+    const t = this.world.teams[this.me];
+    if (t && !t.alive) this.link.send([{ op: 'respawn' }]);
   }
 
   /** Queue orders for my team. They take effect on every client at the same tick. */
@@ -190,7 +209,6 @@ export class Game {
       this.onPause?.(p);
       return;
     }
-    if (this.ended) return;
     this.paused = p;
     this.onPause?.(p);
   }
@@ -241,12 +259,21 @@ export class Game {
     this.updateHover();
     this.render();
     this.hud?.update(dt);
-    this.checkEnd();
+    this.syncMe();
   };
 
   private onEvents(events: GameEvent[]): void {
     if (this.opts.demo) return;
     for (const e of events) {
+      if (e.t === 'teamIn' && e.team === this.me) {
+        this.onDeployed();
+        continue;
+      }
+      if (e.t === 'teamOut' && e.team === this.me && e.n !== -1) {
+        this.hud?.banner('Your swarm was wiped out', '#ff6b5a');
+        this.selected.clear();
+        continue;
+      }
       if (e.t === 'teamOut' && e.n === -1) {
         const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
         if (e.team !== this.me) this.hud?.banner(`An AI took over ${this.teamName(e.team!).replace(' (AI)', '')}'s swarm`, `rgb(${c})`);
@@ -324,23 +351,6 @@ export class Game {
     this.cam.tx += (g.cx - this.cam.tx) * k;
     this.cam.ty += (g.cy - this.cam.ty) * k;
     this.cam.tzoom = 0.75 + 0.15 * Math.sin(this.time * 0.1);
-  }
-
-  private lostShown = false;
-  private checkEnd(): void {
-    if (this.opts.demo || this.ended) return;
-    const w = this.world;
-    const mine = w.teams[this.me];
-    if (w.winner >= 0) {
-      this.ended = true;
-      const kind: EndKind = w.winner === this.me ? 'won' : this.lostShown || this.me < 0 ? 'over' : 'lost';
-      setTimeout(() => this.onEnd?.(kind), kind === 'won' ? 1200 : 1800);
-    } else if (mine && !mine.alive && !this.lostShown) {
-      // Knocked out while others fight on: offer to keep watching.
-      this.lostShown = true;
-      this.selected.clear();
-      setTimeout(() => this.onEnd?.('lost'), 1800);
-    }
   }
 
   // ------------------------------------------------------------------ camera
@@ -728,6 +738,7 @@ export class Game {
         return;
       }
       if (this.paused || this.menuOpen) return;
+      if (k === ' ' && this.world.teams[this.me] && !this.world.teams[this.me].alive) { e.preventDefault(); this.respawn(); return; }
       if (k === 'enter' || k === '/') { e.preventDefault(); this.hud?.dock.focus(); return; }
       if (k === 'y') { this.hud?.toggleResearch(); return; }
       if ((e.ctrlKey || e.metaKey) && k === 'a') { e.preventDefault(); this.action('selectAll'); return; }
@@ -1004,13 +1015,6 @@ export class Game {
         break;
       case 'm0': case 'm1': case 'm2': case 'm3': case 'm4': {
         const role = Number(a[1]) as Role;
-        const t = w.teams[this.me];
-        const unlock = ROLE_UNLOCK_BY_ROLE.get(role);
-        if (unlock && !t.unlocked.has(unlock.id)) {
-          ok = false;
-          this.fx.text(w.groups[ids[0]].cx, w.groups[ids[0]].cy - 30, `Research ${unlock.name} first`, '#ff8f7a', 14, 1.6);
-          break;
-        }
         this.issue({ op: 'morph', ids, role: ROLES[role].name });
         break;
       }

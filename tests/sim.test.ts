@@ -86,11 +86,7 @@ describe('world', () => {
     expect(w.cmdShield([g.id])).toBe(true);
     expect(g.energy).toBeLessThan(100);
     expect(w.cmdShield([g.id])).toBe(false); // cooldown
-    w.cmdMorph([g.id], Role.Tank);
-    run(w, 3);
-    expect(g.role).toBe(Role.Drone); // tank isn't researched yet
-    w.teams[0].points = 2;
-    expect(w.buyPart(0, 'tank')).toBe(true);
+    expect(w.buyPart(0, 'tank')).toBe(false); // morphs aren't research: they're always available
     w.cmdMorph([g.id], Role.Tank);
     run(w, 3);
     expect(g.role).toBe(Role.Tank);

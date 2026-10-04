@@ -3,10 +3,10 @@ import {
   CRUISE_MAX, CRUISE_RAMP, DASH, DIFFICULTY, DT, Difficulty, ENERGY_MAX, ENERGY_REGEN, FORMATIONS, Formation,
   GRID_CELL, HARVEST_RATE, MASS_PER_UNIT, MAX_RESEARCH_LEVEL, MAX_UNITS, MORPH_TIME, NOVA, PLAYER_CAP,
   GROWTH_KNEE, ARTILLERY_HITS, ARTILLERY_MIN_RANGE, COUNTER, REPLICATE_MIN, REPLICATE_RATE, RESEARCH_POINT_BASE, RESEARCH_RATE, ROLES, Role, SHIELD, SHIP_TEAM, SHIPS,
-  ResearchTrack, TEAM_COLORS, UNIT_SPACING,
+  ResearchTrack, TEAM_COLORS, TEAM_NAMES, UNIT_SPACING, ARENA, BOT_NAMES,
 } from './config';
 import { Grid } from './grid';
-import { CellStat, Design, MIN_CELLS, PART_BY_ID, ROLE_UNLOCKS, ROLE_UNLOCK_BY_ROLE, cellStats, constructSpeed, designUnits, largestComponent } from './parts';
+import { CellStat, Design, MIN_CELLS, PART_BY_ID, ROLE_UNLOCKS, cellStats, constructSpeed, designUnits, largestComponent } from './parts';
 import { Rng } from './rng';
 import { updateShips, updateWaves } from './ships';
 import { updateAI } from './ai';
@@ -66,10 +66,14 @@ export interface Group {
   cSpeed: number;
   integrityDirty: boolean;
   peak: number; // largest size this group reached
+  diedAt: number; // sim time the group died (-1 while alive); dead slots are recycled in the arena
 }
 
 export interface Team {
   id: number;
+  owner: number; // player id driving this swarm, -1 = bot
+  name: string;
+  deadAt: number;
   alive: boolean;
   ai: boolean;
   color: [number, number, number];
@@ -99,6 +103,7 @@ export interface Rock {
   seed: number;
   alive: boolean;
   wreck: boolean;
+  deadAt?: number;
 }
 
 export interface Ship {
@@ -116,6 +121,7 @@ export interface Ship {
   ty: number;
   think: number;
   alive: boolean;
+  deadAt?: number;
   flash: number;
   seed: number;
 }
@@ -129,7 +135,7 @@ export interface Bomb { x: number; y: number; t: number; fuse: number; r: number
 export interface Pool { x: number; y: number; r: number; t: number; dur: number; dps: number }
 
 export interface GameEvent {
-  t: 'tracer' | 'death' | 'spawn' | 'explode' | 'shipDeath' | 'nova' | 'novaCharge' | 'dash' | 'shield'
+  t: 'tracer' | 'death' | 'spawn' | 'teamIn' | 'explode' | 'shipDeath' | 'nova' | 'novaCharge' | 'dash' | 'shield'
     | 'harvest' | 'research' | 'wave' | 'morph' | 'bomb' | 'melee' | 'hitShip' | 'fail' | 'shellFire'
     | 'groupLost' | 'teamOut';
   x: number;
@@ -148,6 +154,7 @@ export interface WorldOptions {
   rivals?: number; // singleplayer-style setup: team 0 human + this many AI teams
   teams?: number; // total teams (2-4); overrides rivals
   humans?: number[]; // which teams are human-controlled (default [0])
+  arena?: boolean; // endless multiplayer arena (ignores teams/humans/size)
   difficulty?: Difficulty;
   startUnits?: number;
   waves?: boolean;
@@ -197,15 +204,180 @@ export class World {
   nextWave = 75;
   winner = -1; // team id once decided
   aiMem: Record<number, unknown> = {}; // per-team AI memory (kept here so snapshots include it)
+  readonly arena: boolean;
+  rockTarget = 0; // arena: asteroid count the field regrows to
 
   constructor(opts: WorldOptions = {}) {
-    this.size = opts.size ?? 6000;
+    this.arena = opts.arena ?? false;
+    this.size = this.arena ? ARENA.size : opts.size ?? 6000;
     this.rng = new Rng(opts.seed ?? (Math.random() * 1e9) | 0);
     this.difficulty = opts.difficulty ?? Difficulty.Normal;
     this.waves = opts.waves ?? true;
     this.grid = new Grid(this.size, this.size, GRID_CELL, MAX_UNITS);
+    if (this.arena) {
+      this.setupArena();
+      return;
+    }
     const total = Math.max(1, Math.min(4, opts.teams ?? 1 + Math.max(0, Math.min(3, opts.rivals ?? 2))));
     this.setupMap(total, new Set(opts.humans ?? [0]), opts.startUnits ?? 60);
+  }
+
+  private newTeam(t: number, human: boolean): Team {
+    return {
+      id: t, owner: human ? t : -1, name: human ? TEAM_NAMES[t] : BOT_NAMES[t], deadAt: -1e9,
+      alive: true, ai: !human, color: TEAM_COLORS[t], units: 0,
+      cap: human ? PLAYER_CAP : DIFFICULTY[this.difficulty].aiCap, points: 0, pointsEarned: 0, progress: 0,
+      levels: { speed: 0, damage: 0, hull: 0, replication: 0 },
+      // Every swarm can morph into any role; research only unlocks construct particles.
+      unlocked: new Set(['drone', ...ROLE_UNLOCKS.map((r) => r.id)]), designs: [],
+      homeX: 0, homeY: 0, kills: 0, lost: 0, peak: 0, spawned: 0,
+    };
+  }
+
+  // ---------------------------------------------------------------- arena
+
+  private setupArena(): void {
+    for (let t = 0; t < ARENA.slots; t++) {
+      const team = this.newTeam(t, false);
+      team.alive = false;
+      this.teams.push(team);
+    }
+    this.scatterRocks([]);
+    this.rockTarget = this.rocks.length;
+    for (let t = 0; t < ARENA.minSwarms - 1; t++) this.spawnTeam(t, -1, BOT_NAMES[t]);
+  }
+
+  private scatterRocks(avoid: { x: number; y: number }[]): void {
+    const S = this.size;
+    const count = Math.round((S * S) / 900000);
+    let tries = 0;
+    while (this.rocks.length < count + avoid.length && tries++ < 3000) {
+      const x = this.rng.range(200, S - 200);
+      const y = this.rng.range(200, S - 200);
+      if (this.rocks.some((r) => hyp(r.x - x, r.y - y) < 320)) continue;
+      if (avoid.some((t) => hyp(t.x - x, t.y - y) < 300)) continue;
+      // Richer rocks toward the centre to pull swarms into conflict.
+      const centre = 1 - hyp(x - S / 2, y - S / 2) / (S * 0.7);
+      this.addRock(x, y, this.rng.range(120, 300) + centre * 350);
+    }
+  }
+
+  teamOfPlayer(pid: number): number {
+    if (pid < 0) return -1;
+    for (const t of this.teams) if (t.owner === pid) return t.id;
+    return -1;
+  }
+
+  /** A player entered the arena: they take a free slot, or replace the smallest bot. */
+  joinPlayer(pid: number, name: string): number {
+    if (!this.arena || pid < 0 || this.teamOfPlayer(pid) >= 0) return this.teamOfPlayer(pid);
+    let slot = -1;
+    for (const t of this.teams) if (!t.alive && t.owner < 0 && (slot < 0 || t.deadAt < this.teams[slot].deadAt)) slot = t.id;
+    if (slot < 0) for (const t of this.teams) if (t.owner < 0 && (slot < 0 || t.units < this.teams[slot].units)) slot = t.id;
+    if (slot < 0) return -1; // arena full of players: watch only
+    this.spawnTeam(slot, pid, name || 'Pilot');
+    return slot;
+  }
+
+  /** A player left: their swarm fights on as a bot until it dies. */
+  leavePlayer(pid: number): void {
+    const t = this.teams[this.teamOfPlayer(pid)];
+    if (!t) return;
+    t.owner = -1;
+    t.ai = true;
+    t.cap = ARENA.botCap;
+    t.name = `${t.name} (AI)`;
+    for (const r of ROLE_UNLOCKS) t.unlocked.add(r.id);
+    if (t.alive) this.events.push({ t: 'teamOut', x: t.homeX, y: t.homeY, team: t.id, n: -1 });
+  }
+
+  respawnPlayer(pid: number): void {
+    const t = this.teams[this.teamOfPlayer(pid)];
+    if (t && !t.alive && this.time - t.deadAt >= 2) this.spawnTeam(t.id, pid, t.name);
+  }
+
+  /** Loading a saved arena with nobody connected yet: every player-owned swarm becomes a bot. */
+  orphanAll(): void {
+    for (const t of this.teams) if (t.owner >= 0) {
+      t.owner = -1; t.ai = true; t.cap = ARENA.botCap;
+      if (!t.name.endsWith(' (AI)')) t.name += ' (AI)';
+      for (const r of ROLE_UNLOCKS) t.unlocked.add(r.id);
+    }
+  }
+
+  /** (Re)spawn a swarm in a slot, as far from everyone else as the map allows. */
+  private spawnTeam(slot: number, owner: number, name: string): void {
+    this.clearTeam(slot);
+    const [x, y] = this.pickSpawn(slot);
+    const fresh = this.newTeam(slot, owner >= 0);
+    Object.assign(this.teams[slot], fresh, {
+      owner, name, homeX: x, homeY: y, cap: owner >= 0 ? ARENA.playerCap : ARENA.botCap,
+    });
+    delete this.aiMem[slot];
+    const g = this.createGroup(slot, x, y);
+    for (let i = 0; i < ARENA.startUnits; i++) {
+      const a = this.rng.next() * Math.PI * 2;
+      const r = Math.sqrt(this.rng.next()) * 60;
+      this.spawnUnit(g, x + Math.cos(a) * r, y + Math.sin(a) * r, false);
+    }
+    // Always something to mine nearby.
+    if (!this.rocks.some((r) => r.alive && hyp(r.x - x, r.y - y) < 650)) {
+      const a = Math.atan2(this.size / 2 - y, this.size / 2 - x) + this.rng.range(-0.5, 0.5);
+      this.addRock(x + Math.cos(a) * 380, y + Math.sin(a) * 380, 260);
+    }
+    this.events.push({ t: 'teamIn', x, y, team: slot, n: owner });
+  }
+
+  /** Remove a slot's remaining units and groups without counting them as kills. */
+  private clearTeam(slot: number): void {
+    for (let i = 0; i < this.hi; i++) {
+      if (!this.ualive[i] || this.uteam[i] !== slot) continue;
+      this.ualive[i] = 0;
+      this.free.push(i);
+    }
+    for (const g of this.groups) if (g.alive && g.team === slot) { g.alive = false; g.count = 0; }
+    this.teams[slot].units = 0;
+  }
+
+  private pickSpawn(slot: number): [number, number] {
+    const S = this.size;
+    let best: [number, number] = [S / 2, S / 2], bestScore = -Infinity;
+    for (let k = 0; k < 20; k++) {
+      const ring = k < 14 ? 0.39 : 0.2;
+      const a = (k / (k < 14 ? 14 : 6)) * Math.PI * 2 + this.rng.range(-0.2, 0.2);
+      const x = S / 2 + Math.cos(a) * S * ring, y = S / 2 + Math.sin(a) * S * ring;
+      let score = 1e9;
+      for (const g of this.groups) {
+        if (!g.alive || g.team === slot) continue;
+        score = Math.min(score, hyp(g.cx - x, g.cy - y) - Math.sqrt(g.count) * 20);
+      }
+      for (const sh of this.ships) if (sh.alive) score = Math.min(score, hyp(sh.x - x, sh.y - y) + 300);
+      if (score > bestScore) { bestScore = score; best = [x, y]; }
+    }
+    return best;
+  }
+
+  /** Keeps the endless arena alive: bots refill empty slots and mined-out asteroids regrow. */
+  private arenaUpkeep(): void {
+    const alive = this.teams.filter((t) => t.alive).length;
+    if (alive < ARENA.minSwarms) {
+      const slot = this.teams.find((t) => !t.alive && t.owner < 0 && this.time - t.deadAt > ARENA.botRespawn);
+      if (slot) this.spawnTeam(slot.id, -1, BOT_NAMES[slot.id]);
+    }
+    let rocks = 0;
+    for (const r of this.rocks) if (r.alive && !r.wreck) rocks++;
+    if (rocks < this.rockTarget) {
+      const S = this.size;
+      for (let tries = 0; tries < 12; tries++) {
+        const x = this.rng.range(250, S - 250), y = this.rng.range(250, S - 250);
+        if (this.rocks.some((r) => r.alive && hyp(r.x - x, r.y - y) < 320)) continue;
+        if (this.groups.some((g) => g.alive && hyp(g.cx - x, g.cy - y) < g.radius + 260)) continue;
+        const centre = 1 - hyp(x - S / 2, y - S / 2) / (S * 0.7);
+        const rock = this.addRock(x, y, this.rng.range(120, 300) + centre * 350);
+        this.events.push({ t: 'spawn', x: rock.x, y: rock.y, team: -1 });
+        break;
+      }
+    }
   }
 
   // ---------------------------------------------------------------- setup
@@ -216,18 +388,12 @@ export class World {
     const corners = [
       [m, S - m], [S - m, m], [S - m, S - m], [m, m],
     ];
-    const diff = DIFFICULTY[this.difficulty];
     for (let t = 0; t < total; t++) {
       const [hx, hy] = corners[t];
-      const human = humans.has(t);
-      this.teams.push({
-        id: t, alive: true, ai: !human, color: TEAM_COLORS[t], units: 0,
-        cap: human ? PLAYER_CAP : diff.aiCap, points: 0, pointsEarned: 0, progress: 0,
-        levels: { speed: 0, damage: 0, hull: 0, replication: 0 },
-        // AI swarms know every swarm type; humans research them.
-        unlocked: new Set(human ? ['drone'] : ['drone', ...ROLE_UNLOCKS.map((r) => r.id)]), designs: [],
-        homeX: hx, homeY: hy, kills: 0, lost: 0, peak: 0, spawned: 0,
-      });
+      const team = this.newTeam(t, humans.has(t));
+      team.homeX = hx;
+      team.homeY = hy;
+      this.teams.push(team);
       const g = this.createGroup(t, hx, hy);
       for (let i = 0; i < startUnits; i++) {
         const a = this.rng.next() * Math.PI * 2;
@@ -254,24 +420,29 @@ export class World {
   }
 
   addRock(x: number, y: number, mass: number, wreck = false): Rock {
+    // The arena runs forever: reuse long-dead entries so ids stay small and stable while they're alive.
+    const old = this.arena ? this.rocks.find((r) => !r.alive && this.time - (r.deadAt ?? 0) > 30) : undefined;
     const rock: Rock = {
-      id: this.rocks.length, x, y, mass, maxMass: mass, r: rockRadius(mass), seed: this.rng.next() * 100,
+      id: old ? old.id : this.rocks.length, x, y, mass, maxMass: mass, r: rockRadius(mass), seed: this.rng.next() * 100,
       alive: true, wreck,
     };
-    this.rocks.push(rock);
+    if (old) this.rocks[old.id] = rock;
+    else this.rocks.push(rock);
     return rock;
   }
 
   createGroup(team: number, x: number, y: number): Group {
+    const old = this.arena ? this.groups.find((o) => !o.alive && o.diedAt >= 0 && this.time - o.diedAt > 30) : undefined;
     const g: Group = {
-      id: this.groups.length, team, alive: true, ax: x, ay: y, hx: 1, hy: 0,
+      id: old ? old.id : this.groups.length, team, diedAt: -1, alive: true, ax: x, ay: y, hx: 1, hy: 0,
       order: { type: 'idle', x, y, group: -1, ship: -1, rock: -1 },
       formation: Formation.Swarm, role: Role.Drone, morphTo: Role.Drone, morphT: 0,
       energy: ENERGY_MAX * 0.5, cdDash: 0, cdShield: 0, cdNova: 0, dashT: 0, dashX: 0, dashY: 0,
       shieldT: 0, novaT: 0, cruise: 0, count: 0, cx: x, cy: y, radius: 10, spread: 0, vx: 0, vy: 0, enemyNear: false, combatT: 99,
       progress: 0, harvesting: false, born: this.time, recentLoss: 0, path: [], peak: 0, design: null, cells: null, slotUnit: null, cSpeed: 0, integrityDirty: false,
     };
-    this.groups.push(g);
+    if (old) this.groups[old.id] = g;
+    else this.groups.push(g);
     return g;
   }
 
@@ -533,14 +704,6 @@ export class World {
   /** Research a particle part. */
   buyPart(team: number, partId: string): boolean {
     const t = this.teams[team];
-    const roleUnlock = ROLE_UNLOCKS.find((r) => r.id === partId);
-    if (roleUnlock) {
-      if (t.unlocked.has(partId) || t.points < roleUnlock.cost) return false;
-      t.points -= roleUnlock.cost;
-      t.unlocked.add(partId);
-      this.events.push({ t: 'research', x: t.homeX, y: t.homeY, team, msg: `${roleUnlock.name} unlocked` });
-      return true;
-    }
     const part = PART_BY_ID.get(partId);
     if (!part || t.unlocked.has(partId) || t.points < part.cost) return false;
     if (!part.requires.every((r) => t.unlocked.has(r))) return false;
@@ -641,11 +804,6 @@ export class World {
     for (const id of ids) {
       const g = this.groups[id];
       if (!g?.alive || g.cells || (g.role === role && g.morphT <= 0) || (g.morphTo === role && g.morphT > 0)) continue;
-      const gate = ROLE_UNLOCK_BY_ROLE.get(role);
-      if (gate && !this.teams[g.team].unlocked.has(gate.id)) {
-        this.events.push({ t: 'fail', x: g.cx, y: g.cy, team: g.team, msg: `Research ${gate.name} first (Y)` });
-        continue;
-      }
       g.morphTo = role;
       g.morphT = MORPH_TIME;
       this.events.push({ t: 'morph', x: g.cx, y: g.cy, team: g.team, r: g.radius });
@@ -918,6 +1076,7 @@ export class World {
           }
           if (r.mass <= 0.5) {
             r.alive = false;
+            r.deadAt = this.time;
             this.events.push({ t: 'explode', x: r.x, y: r.y, r: 60, team: -1 });
             this.setOrder(g, 'idle', g.cx, g.cy);
           }
@@ -1147,6 +1306,7 @@ export class World {
     s.flash = 1;
     if (s.hp <= 0) {
       s.alive = false;
+      s.deadAt = this.time;
       const st = SHIPS[s.type];
       if (attacker >= 0 && this.teams[attacker]) this.teams[attacker].kills += 5;
       this.events.push({ t: 'shipDeath', x: s.x, y: s.y, r: st.radius, n: s.type });
@@ -1518,6 +1678,7 @@ export class World {
         g.alive = false;
         if (g.peak >= 25) this.events.push({ t: 'groupLost', x: g.cx, y: g.cy, team: g.team, n: g.peak });
       }
+      if (!g.alive && g.diedAt < 0) g.diedAt = this.time;
     }
     // Rock and ship ids are stable for the whole match (they are array indices and dead entries stay),
     // so orders, AI memory and LLM programs can safely remember them.
@@ -1525,12 +1686,14 @@ export class World {
 
   addShip(type: number, x: number, y: number): Ship {
     const st = SHIPS[type];
+    const old = this.arena ? this.ships.find((o) => !o.alive && this.time - (o.deadAt ?? 0) > 30) : undefined;
     const s: Ship = {
-      id: this.ships.length, type, x, y, vx: 0, vy: 0, angle: Math.atan2(this.size / 2 - y, this.size / 2 - x),
+      id: old ? old.id : this.ships.length, type, x, y, vx: 0, vy: 0, angle: Math.atan2(this.size / 2 - y, this.size / 2 - x),
       hp: st.hp, maxHp: st.hp, cd: 1 + this.rng.next(), tx: this.size / 2, ty: this.size / 2, think: 0,
       alive: true, flash: 0, seed: this.rng.next(),
     };
-    this.ships.push(s);
+    if (old) this.ships[old.id] = s;
+    else this.ships.push(s);
     return s;
   }
 
@@ -1538,8 +1701,13 @@ export class World {
     for (const t of this.teams) {
       if (t.alive && t.units <= 0 && this.tick > 2) {
         t.alive = false;
+        t.deadAt = this.time;
         this.events.push({ t: 'teamOut', x: t.homeX, y: t.homeY, team: t.id });
       }
+    }
+    if (this.arena) {
+      if (this.tick % 60 === 0) this.arenaUpkeep();
+      return; // the arena never ends
     }
     if (this.winner >= 0 || this.teams.length < 2) return;
     const alive = this.teams.filter((t) => t.alive);
@@ -1560,7 +1728,8 @@ export class World {
   serialize(): Record<string, unknown> {
     const out: Record<string, unknown> = { $v: SNAPSHOT_VERSION };
     for (const k of Object.keys(this)) {
-      if (k === 'grid' || k === 'events') continue;
+      // upx/upy are only render interpolation state; restore() rebuilds them.
+      if (k === 'grid' || k === 'events' || k === 'upx' || k === 'upy') continue;
       const v = (this as unknown as Record<string, unknown>)[k];
       if (k === 'rng') out.rng = this.rng.state;
       else if (ArrayBuffer.isView(v) && (v as Float32Array).length === MAX_UNITS) out[k] = encode((v as Float32Array).subarray(0, this.hi));
@@ -1585,6 +1754,8 @@ export class World {
       } else if (k !== 'size' && k !== 'difficulty') self[k] = val;
     }
     this.events = [];
+    this.upx.set(this.ux);
+    this.upy.set(this.uy);
     this.grid.build(this.ux, this.uy, this.ualive, this.hi);
   }
 
@@ -1685,7 +1856,7 @@ export function shapeProject(ox: number, oy: number, hx: number, hy: number, n: 
   return out;
 }
 
-const SNAPSHOT_VERSION = 1;
+export const SNAPSHOT_VERSION = 2;
 
 type Enc = unknown;
 function encode(v: unknown): Enc {
