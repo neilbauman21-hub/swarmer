@@ -326,7 +326,7 @@ export class Game {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, this.cssW, this.cssH);
     const w = this.world;
-    ctx.font = '600 11px Inter, system-ui, sans-serif';
+    ctx.font = '600 11px "Saira Condensed", "Arial Narrow", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
@@ -415,8 +415,8 @@ export class Game {
         label += ` · ${ROLES[g.role].name}`;
       }
       const tw = ctx.measureText(label).width + 14;
-      ctx.fillStyle = 'rgba(6,10,20,0.72)';
-      roundRect(ctx, x - tw / 2, y - 9, tw, 18, 9);
+      ctx.fillStyle = 'rgba(6,8,11,0.82)';
+      roundRect(ctx, x - tw / 2, y - 9, tw, 18, 2);
       ctx.fill();
       ctx.fillStyle = css;
       ctx.fillText(label, x, y + 0.5);
@@ -451,10 +451,10 @@ export class Game {
       const r = w.rocks[this.hoverRock];
       if (r?.alive) {
         const [x, y] = this.worldToScreen(r.x, r.y - r.r - 16);
-        ctx.fillStyle = 'rgba(6,10,20,0.72)';
+        ctx.fillStyle = 'rgba(6,8,11,0.82)';
         const txt = `${r.wreck ? 'Wreck' : 'Asteroid'} · ${Math.round(r.mass / 3)} units of mass`;
         const tw = ctx.measureText(txt).width + 14;
-        roundRect(ctx, x - tw / 2, y - 9, tw, 18, 9);
+        roundRect(ctx, x - tw / 2, y - 9, tw, 18, 2);
         ctx.fill();
         ctx.fillStyle = '#d9cbb5';
         ctx.fillText(txt, x, y + 0.5);
@@ -465,7 +465,7 @@ export class Game {
     for (const t of this.fx.texts) {
       const [x, y] = this.worldToScreen(t.x, t.y);
       ctx.globalAlpha = Math.min(1, (1 - t.t / t.dur) * 2);
-      ctx.font = `700 ${t.size}px Inter, system-ui, sans-serif`;
+      ctx.font = `700 ${t.size}px "Saira Condensed", "Arial Narrow", sans-serif`;
       ctx.fillStyle = t.color;
       ctx.fillText(t.text, x, y);
     }
@@ -509,7 +509,7 @@ export class Game {
       if (a.label) {
         ctx.globalAlpha = Math.min(1, a.t);
         ctx.fillStyle = a.color;
-        ctx.font = '700 10px Inter, system-ui, sans-serif';
+        ctx.font = '700 10px "Saira Condensed", "Arial Narrow", sans-serif';
         ctx.fillText(a.label, tx - Math.cos(ang) * 26, ty - Math.sin(ang) * 22);
         ctx.globalAlpha = 1;
       }
@@ -529,7 +529,7 @@ export class Game {
     // Context cursor hint.
     const hint = this.cursorHint();
     if (hint && this.mouse.in && !this.drag) {
-      ctx.font = '600 11px Inter, system-ui, sans-serif';
+      ctx.font = '600 11px "Saira Condensed", "Arial Narrow", sans-serif';
       ctx.textAlign = 'left';
       ctx.fillStyle = hint[1];
       ctx.fillText(hint[0], this.mouse.x + 16, this.mouse.y + 18);

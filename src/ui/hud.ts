@@ -59,8 +59,8 @@ export class Hud {
       if (p.id === 'drone') continue;
       (tiers[depth(p.id)] ??= []).push(p);
     }
-    let html = '<div class="panel-title">Research <span class="pts"></span></div><div class="progress"><div></div></div>';
-    html += '<div class="tree-head">Particles <small>unlock parts for constructs, then describe one in the Design tab</small></div><div class="tree">';
+    let html = '<div class="panel-title">Research &amp; development <span class="pts"></span></div><div class="progress"><div></div></div>';
+    html += '<div class="tree-head">Particles <small>unlock parts, then describe a construct in the Fabrication tab</small></div><div class="tree">';
     tiers.forEach((tier, i) => {
       html += `<div class="tier"><div class="tier-label">Tier ${i + 1}</div>`;
       for (const p of tier) {
@@ -147,13 +147,16 @@ export class Hud {
     const me = w.teams[0];
     const t = Math.floor(w.time);
     const next = Math.max(0, Math.ceil(w.nextWave - w.time));
-    const pts = me.points ? ` · <b class="pts">${me.points} research pt${me.points > 1 ? 's' : ''} (Y)</b>` : '';
-    this.stats.innerHTML = `<b class="units">${me.units}</b> units · ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')} · <span class="warn">raid in ${next}s</span>${pts}`;
+    this.stats.innerHTML = `<div class="st"><span>Units</span><b class="units">${me.units}</b></div>
+      <div class="st"><span>Sector time</span><b>${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}</b></div>
+      <div class="st warn"><span>Next raid</span><b>${next}s</b></div>
+      <div class="st"><span>Research</span><b class="${me.points ? 'pts' : ''}">${me.points}</b></div>`;
     let html = '';
     for (const tm of w.teams) {
       if (tm.id === 0) continue;
       const c = TEAM_COLORS[tm.id].map((v) => Math.round(v * 255)).join(',');
-      html += `<span class="team ${tm.alive ? '' : 'dead'}"><i style="background:rgb(${c})"></i>${TEAM_NAMES[tm.id]} ${tm.alive ? tm.units : '✕'}</span>`;
+      const share = tm.alive ? Math.min(100, (100 * tm.units) / Math.max(1, me.units + tm.units)) : 0;
+      html += `<div class="team ${tm.alive ? '' : 'dead'}" style="--c:rgb(${c})"><span>${TEAM_NAMES[tm.id]}</span><b>${tm.alive ? tm.units : 'Destroyed'}</b><i style="width:${share}%"></i></div>`;
     }
     this.teams.innerHTML = html;
     if (!this.research.classList.contains('hidden')) this.refreshResearch();

@@ -17,18 +17,27 @@ try {
 }
 
 const CONTROLS = `
-<div class="controls">
-  <div><kbd>Enter</kbd></div><div>Give your swarm an order in plain English</div>
-  <div><kbd>LMB</kbd> drag / click</div><div>Select groups (<kbd>Shift</kbd> adds, double-click = all on screen)</div>
-  <div><kbd>RMB</kbd></div><div>Move · attack enemy · harvest rock · join friendly group</div>
-  <div><kbd>Wheel</kbd> · <kbd>MMB</kbd> drag · arrows</div><div>Zoom · pan</div>
-  <div><kbd>S</kbd> <kbd>G</kbd> <kbd>H</kbd></div><div>Split toward cursor · merge · hold</div>
-  <div><kbd>B</kbd> <kbd>T</kbd> <kbd>Y</kbd></div><div>Replicate · research · research panel</div>
-  <div><kbd>Q</kbd> <kbd>E</kbd> <kbd>R</kbd></div><div>Dash · shield · nova</div>
-  <div><kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> <kbd>V</kbd></div><div>Swarm · wedge · ring · line formation</div>
-  <div><kbd>1</kbd>–<kbd>5</kbd></div><div>Morph: drone · striker · tank · harvester · artillery</div>
-  <div><kbd>Tab</kbd> <kbd>Space</kbd> <kbd>\`</kbd></div><div>Cycle groups · center camera · select all</div>
-</div>`;
+<dl class="controls">
+  <dt><kbd>Enter</kbd></dt><dd>Give an order in plain language</dd>
+  <dt><kbd>LMB</kbd></dt><dd>Select · drag a box · <kbd>Shift</kbd> adds · double-click selects all on screen</dd>
+  <dt><kbd>RMB</kbd></dt><dd>Move · attack · harvest · join a friendly swarm · drag to draw a route</dd>
+  <dt><kbd>Wheel</kbd> <kbd>MMB</kbd></dt><dd>Zoom · pan (arrow keys and screen edges pan too)</dd>
+  <dt><kbd>S</kbd> <kbd>G</kbd> <kbd>H</kbd></dt><dd>Split toward cursor · merge · hold</dd>
+  <dt><kbd>B</kbd> <kbd>T</kbd> <kbd>Y</kbd></dt><dd>Replicate · research · research tree</dd>
+  <dt><kbd>Q</kbd> <kbd>E</kbd> <kbd>R</kbd></dt><dd>Dash · shield · nova</dd>
+  <dt><kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> <kbd>V</kbd></dt><dd>Swarm · wedge · ring · line formation</dd>
+  <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Morph: drone · striker · tank · harvester · artillery</dd>
+  <dt><kbd>Tab</kbd> <kbd>Space</kbd></dt><dd>Cycle groups · center camera</dd>
+  <dt><kbd>P</kbd> <kbd>Esc</kbd></dt><dd>Pause</dd>
+</dl>`;
+
+const BUILD = 'BUILD 0.6';
+
+const INTERCEPTS = [
+  { order: 'split into three and harvest the closest rocks', code: ['for (const g of state.groups)', '  api.split(g, rock.x - g.x, rock.y - g.y);', '  api.harvest(half, nearest(half, state.rocks));'] },
+  { order: 'strikers flank ember from the north, rest hold the line', code: ["api.morph(flank, 'striker');", 'api.path(flank, [[x, y - 600], [ember.x, ember.y]]);', "api.formation(rest, 'line');"] },
+  { order: 'build a siege tank and push verdant', code: ["api.build(biggest, 'Siege Tank');", 'api.attack(tank, nearest(tank, verdant));', 'if (tank.ready.shield) api.shield(tank);'] },
+];
 
 function screen(cls: string, html: string): HTMLDivElement {
   const el = document.createElement('div');
@@ -81,6 +90,39 @@ function stopDemo(): void {
   demoRoot.remove();
 }
 
+let interceptTimer = 0;
+
+/** Types example orders and the code they turn into, so the menu shows what the prompt does. */
+function runIntercepts(host: HTMLElement): void {
+  const orderEl = host.querySelector('.ic-order')!;
+  const codeEl = host.querySelector('.ic-code')!;
+  let i = 0;
+  const play = () => {
+    const ic = INTERCEPTS[i++ % INTERCEPTS.length];
+    orderEl.textContent = '';
+    codeEl.innerHTML = '';
+    let c = 0;
+    const type = () => {
+      if (!host.isConnected) return;
+      if (c <= ic.order.length) {
+        orderEl.textContent = ic.order.slice(0, c++);
+        interceptTimer = window.setTimeout(type, 28 + Math.random() * 40);
+        return;
+      }
+      ic.code.forEach((line, k) => {
+        interceptTimer = window.setTimeout(() => {
+          const d = document.createElement('div');
+          d.textContent = line;
+          codeEl.append(d);
+        }, 350 + k * 260);
+      });
+      interceptTimer = window.setTimeout(play, 4200);
+    };
+    type();
+  };
+  play();
+}
+
 function menu(): void {
   closeScreens();
   game?.destroy();
@@ -88,39 +130,84 @@ function menu(): void {
   startDemo();
   const opts = { ...lastOpts };
   const el = screen('menu', `
-    <div class="menu-card">
-      <h1>SWARMER</h1>
-      <p class="tag">Command thousands of units in plain English.</p>
-      <div class="pitch">
-        <div class="pitch-prompt"><span>›</span> split into three, harvest the closest rocks, then hunt Ember with strikers</div>
-        <p>Type an order and the swarm writes its own program, then runs it live. Mouse and hotkeys still work when you want direct control.</p>
-      </div>
-      <div class="opt"><label>Difficulty</label><div class="seg" data-choice="diff"></div></div>
-      <div class="opt"><label>Rival swarms</label><div class="seg" data-choice="rivals"></div></div>
-      <div class="opt"><label>Map</label><div class="seg" data-choice="size"></div></div>
-      <button class="play">Play</button>
-      <p class="desktop-note">Swarmer is built for a mouse and keyboard. Open it on a desktop for the full game.</p>
-      <details><summary>Controls</summary>${CONTROLS}</details>
-    </div>`);
+    <div class="shell">
+      <header class="brand">
+        <div class="kicker">Tactical swarm command</div>
+        <h1 class="logo">SWARMER</h1>
+        <div class="rule"><i></i></div>
+      </header>
+      <nav class="menu-list" aria-label="Main menu">
+        <button class="mi mi-primary" data-act="deploy">Deploy<small>Launch the sector below</small></button>
+        <button class="mi" data-act="briefing">Briefing<small>How the swarm thinks</small></button>
+        <button class="mi" data-act="controls">Controls<small>Mouse and hotkeys</small></button>
+        <button class="mi" data-act="sound">Sound<small class="snd"></small></button>
+      </nav>
+      <section class="panel setup" aria-label="Sector setup">
+        <div class="panel-h">Sector setup</div>
+        <div class="opt"><label>Difficulty</label><div class="seg" data-choice="diff"></div></div>
+        <div class="opt"><label>Rival swarms</label><div class="seg" data-choice="rivals"></div></div>
+        <div class="opt"><label>Sector size</label><div class="seg" data-choice="size"></div></div>
+      </section>
+      <p class="desktop-note">Built for mouse and keyboard. Open it on a desktop for the full game.</p>
+    </div>
+    <aside class="panel side" data-panel="intercept">
+      <div class="panel-h">Comms <span class="live">Live</span></div>
+      <div class="ic-line"><span class="ic-pr">ORDER&gt;</span> <span class="ic-order"></span><span class="caret"></span></div>
+      <div class="ic-code"></div>
+      <p class="ic-note">Type orders in plain language. Your swarm writes its own program and runs it, live.</p>
+    </aside>
+    <aside class="panel side" data-panel="briefing" hidden>
+      <div class="panel-h">Briefing</div>
+      <ol class="brief">
+        <li><b>Grow.</b> Right-click asteroids to harvest them into new units. Press <kbd>B</kbd> to replicate in place.</li>
+        <li><b>Talk.</b> Press <kbd>Enter</kbd> and give an order in plain language. The swarm writes a program for it; <em>Show code</em> reveals what it wrote.</li>
+        <li><b>Research.</b> <kbd>T</kbd> earns points; <kbd>Y</kbd> opens the tree. Unlock armor, cannons, menders and more.</li>
+        <li><b>Fabricate.</b> In the Fabrication tab, describe a construct like a tank. It is built from your own units and crumbles as it takes hits.</li>
+        <li><b>Survive.</b> Raider fleets hunt every swarm. Wipe out the rival swarms to secure the sector.</li>
+      </ol>
+    </aside>
+    <aside class="panel side" data-panel="controls" hidden>
+      <div class="panel-h">Controls</div>
+      ${CONTROLS}
+    </aside>
+    <footer class="foot"><span>${BUILD}</span><span>AI by Cloudflare Workers AI</span></footer>`);
   choice(el, 'diff', [0, 1, 2], DIFFICULTY.map((d) => d.name), opts.difficulty, (v) => (opts.difficulty = v));
   choice(el, 'rivals', [1, 2, 3], ['1', '2', '3'], opts.rivals, (v) => (opts.rivals = v));
   choice(el, 'size', [4500, 6000, 8000], ['Small', 'Medium', 'Large'], opts.size, (v) => (opts.size = v));
-  el.querySelector('.play')!.addEventListener('click', () => {
-    audio.unlock();
-    lastOpts = opts;
-    try { localStorage.setItem('swarmer.opts', JSON.stringify(opts)); } catch { /* ignore */ }
-    start(opts);
-  });
+  const snd = el.querySelector('.snd')!;
+  const showSound = () => (snd.textContent = audio.muted ? 'Off' : 'On');
+  showSound();
+  const show = (name: string) => {
+    el.querySelectorAll<HTMLElement>('.side').forEach((p) => (p.hidden = p.dataset.panel !== name));
+    el.querySelectorAll<HTMLElement>('.mi').forEach((b) => b.classList.toggle('on', b.dataset.act === name));
+  };
+  el.querySelectorAll<HTMLButtonElement>('.mi').forEach((b) =>
+    b.addEventListener('click', () => {
+      audio.unlock();
+      audio.ui('click');
+      const act = b.dataset.act!;
+      if (act === 'deploy') {
+        lastOpts = opts;
+        try { localStorage.setItem('swarmer.opts', JSON.stringify(opts)); } catch { /* ignore */ }
+        start(opts);
+      } else if (act === 'sound') {
+        audio.setMuted(!audio.muted);
+        showSound();
+      } else show(el.querySelector<HTMLElement>(`[data-panel="${act}"]`)!.hidden ? act : 'intercept');
+    }));
+  runIntercepts(el.querySelector('[data-panel="intercept"]')!);
 }
 
 function start(opts: GameOptions): void {
+  clearTimeout(interceptTimer);
   closeScreens();
   stopDemo();
   game?.destroy();
   try {
     game = new Game(app, { ...opts, seed: (Math.random() * 1e9) | 0 }, audio);
   } catch (err) {
-    screen('menu', `<div class="menu-card"><h1>Oops</h1><p class="tag">${(err as Error).message}</p><p>Swarmer needs a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari).</p></div>`);
+    screen('menu', `<div class="shell"><header class="brand"><div class="kicker">Display error</div><h1 class="logo">NO SIGNAL</h1><div class="rule"><i></i></div></header>
+      <section class="panel setup"><p>${(err as Error).message}</p><p>Swarmer needs WebGL2: any recent Chrome, Edge, Firefox or Safari.</p></section></div>`);
     return;
   }
   game.onPause = (p) => (p ? pauseScreen() : closeScreens());
@@ -130,12 +217,15 @@ function start(opts: GameOptions): void {
 function pauseScreen(): void {
   closeScreens();
   const el = screen('pause', `
-    <div class="menu-card">
-      <h2>Paused</h2>
-      <button class="play resume">Resume</button>
-      <div class="row"><button class="ghost restart">Restart</button><button class="ghost quit">Main menu</button></div>
-      ${CONTROLS}
-    </div>`);
+    <div class="shell">
+      <header class="brand"><div class="kicker">Sector ${game ? Math.floor(game.world.time / 60) + ':' + String(Math.floor(game.world.time) % 60).padStart(2, '0') : ''}</div><h1 class="logo">PAUSED</h1><div class="rule"><i></i></div></header>
+      <nav class="menu-list">
+        <button class="mi mi-primary resume">Resume<small>Back to the sector</small></button>
+        <button class="mi restart">Restart<small>Same settings, new sector</small></button>
+        <button class="mi quit">Abandon<small>Return to the main menu</small></button>
+      </nav>
+    </div>
+    <aside class="panel side"><div class="panel-h">Controls</div>${CONTROLS}</aside>`);
   el.querySelector('.resume')!.addEventListener('click', () => game?.setPaused(false));
   el.querySelector('.restart')!.addEventListener('click', () => start(lastOpts));
   el.querySelector('.quit')!.addEventListener('click', menu);
@@ -147,22 +237,25 @@ function endScreen(won: boolean): void {
   const w = game.world;
   const me = w.teams[0];
   const t = Math.floor(w.time);
-  const rivals = w.teams.slice(1).map((tm) => `${TEAM_NAMES[tm.id]}: ${tm.alive ? 'alive' : 'destroyed'}`).join(' · ');
+  const rows = w.teams.slice(1).map((tm) => `<tr><td>${TEAM_NAMES[tm.id]}</td><td class="${tm.alive ? 'alive' : 'dead'}">${tm.alive ? 'Active' : 'Destroyed'}</td><td>${tm.kills}</td></tr>`).join('');
   const el = screen(`end ${won ? 'won' : 'lost'}`, `
-    <div class="menu-card">
-      <h1>${won ? 'Victory' : 'Swarm lost'}</h1>
-      <p class="tag">${won ? 'Every rival swarm has been consumed.' : 'Your swarm perished.'}</p>
-      <div class="end-stats">
-        <div><b>${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}</b><small>time</small></div>
-        <div><b>${me.peak}</b><small>peak units</small></div>
-        <div><b>${me.spawned}</b><small>units grown</small></div>
-        <div><b>${me.kills}</b><small>kills</small></div>
-        <div><b>${me.lost}</b><small>lost</small></div>
-        <div><b>${me.pointsEarned}</b><small>research</small></div>
-      </div>
-      <p class="sub">${rivals} · survived ${w.waveNum} raids</p>
-      <div class="row"><button class="play again">Play again</button><button class="ghost quit">Main menu</button></div>
-    </div>`);
+    <div class="shell">
+      <header class="brand"><div class="kicker">After-action report</div><h1 class="logo">${won ? 'SECURED' : 'SWARM LOST'}</h1><div class="rule"><i></i></div></header>
+      <p class="verdict">${won ? 'Every rival swarm has been consumed. The sector is yours.' : 'Your last unit went dark.'}</p>
+      <dl class="stats-grid">
+        <div><dt>Time</dt><dd>${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}</dd></div>
+        <div><dt>Peak units</dt><dd>${me.peak}</dd></div>
+        <div><dt>Units grown</dt><dd>${me.spawned}</dd></div>
+        <div><dt>Kills</dt><dd>${me.kills}</dd></div>
+        <div><dt>Lost</dt><dd>${me.lost}</dd></div>
+        <div><dt>Raids survived</dt><dd>${w.waveNum}</dd></div>
+      </dl>
+      <nav class="menu-list">
+        <button class="mi mi-primary again">Redeploy<small>New sector, same settings</small></button>
+        <button class="mi quit">Main menu</button>
+      </nav>
+    </div>
+    <aside class="panel side"><div class="panel-h">Rivals</div><table class="rivals"><thead><tr><th>Swarm</th><th>Status</th><th>Kills</th></tr></thead><tbody>${rows}</tbody></table></aside>`);
   el.querySelector('.again')!.addEventListener('click', () => start(lastOpts));
   el.querySelector('.quit')!.addEventListener('click', menu);
 }
