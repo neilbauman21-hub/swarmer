@@ -560,12 +560,18 @@ export class Game {
     // Command pings.
     for (const p of this.pings) {
       const [x, y] = this.worldToScreen(p.x, p.y);
-      // Tiny fading tick where the order landed.
-      const f = p.t / 0.5;
+      // Move marker: a ring that snaps shut on the spot, so the click reads instantly even before the order lands.
+      const f = p.t / 0.6;
+      const k = 1 - (1 - f) * (1 - f);
+      ctx.strokeStyle = p.color;
       ctx.fillStyle = p.color;
-      ctx.globalAlpha = (1 - f) * 0.8;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = (1 - f) * 0.9;
       ctx.beginPath();
-      ctx.arc(x, y, 2.5 + f * 3, 0, Math.PI * 2);
+      ctx.arc(x, y, 16 - k * 12, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, 2.2, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -626,7 +632,7 @@ export class Game {
 
     const dt = 1 / 60;
     for (const p of this.pings) p.t += dt;
-    this.pings = this.pings.filter((p) => p.t < 0.5);
+    this.pings = this.pings.filter((p) => p.t < 0.6);
     for (const a of this.alerts) a.t -= dt;
     this.alerts = this.alerts.filter((a) => a.t > 0);
   }
@@ -672,6 +678,11 @@ export class Game {
     on(canvas, 'pointerdown', (e: PointerEvent) => {
       this.audio.unlock();
       this.context?.close();
+      // Hover is normally refreshed once per frame; refresh it now so a fast move-then-click hits what's under the cursor.
+      this.mouse.x = e.offsetX;
+      this.mouse.y = e.offsetY;
+      this.mouse.in = true;
+      this.updateHover();
       if (this.targeting && (e.button === 0 || e.button === 2)) {
         this.fireTargeting();
         return;
@@ -701,6 +712,9 @@ export class Game {
     });
     on(canvas, 'pointerup', (e: PointerEvent) => {
       if (!this.drag) return;
+      this.mouse.x = e.offsetX;
+      this.mouse.y = e.offsetY;
+      this.updateHover();
       const d = this.drag;
       this.drag = null;
       if (d.button === 2) {
@@ -799,8 +813,10 @@ export class Game {
       }
       this.audio.ui('select');
       this.hud?.notify('select');
-    } else if (this.selectedIds().length) {
+    } else {
       // Click to move (or attack / harvest what's under the cursor), nohope-style.
+      // With nothing selected, the click commands every swarm you have.
+      if (!this.selectedIds().length) for (const o of this.world.groupsOf(this.me)) this.selected.add(o.id);
       this.rightClick(shift);
     }
   }

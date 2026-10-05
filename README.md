@@ -31,7 +31,7 @@ Requires a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari). Des
 
 | Input | Action |
 |---|---|
-| LMB click | Move / attack / harvest with the selection; click your own swarm to select it |
+| LMB click | Move / attack / harvest with the selection (or with every swarm if nothing is selected); click your own swarm to select it |
 | LMB drag | Box select (Shift adds, double-click = all on screen) |
 | RMB on your swarm | Order menu: replicate, research, split, merge, hold, morph, formation, abilities, fabricate, research tree |
 | RMB elsewhere | Move, attack enemy, harvest rock; drag to draw a route, Shift queues waypoints |
