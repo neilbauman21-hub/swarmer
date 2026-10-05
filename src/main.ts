@@ -21,26 +21,15 @@ const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 
 const CONTROLS = `
 <dl class="controls">
-  <dt><kbd>Enter</kbd></dt><dd>Give an order in plain language</dd>
-  <dt><kbd>LMB</kbd></dt><dd>Click to move, attack or harvest · click your swarm to select it · drag a box · double-click selects all on screen</dd>
-  <dt><kbd>RMB</kbd></dt><dd>On your swarm: every order (replicate, research, split, morph, formation, abilities, fabricate) · elsewhere: same as a click · drag to draw a route · <kbd>Shift</kbd> queues waypoints</dd>
-  <dt><kbd>Wheel</kbd> <kbd>MMB</kbd></dt><dd>Zoom · pan (arrow keys and screen edges pan too)</dd>
-  <dt><kbd>S</kbd> <kbd>G</kbd> <kbd>H</kbd></dt><dd>Split toward cursor · merge · hold</dd>
-  <dt><kbd>B</kbd> <kbd>T</kbd> <kbd>Y</kbd></dt><dd>Replicate · research (earns points) · research tree (construct particles)</dd>
-  <dt><kbd>Q</kbd> <kbd>E</kbd> <kbd>R</kbd></dt><dd>Dash · shield · nova</dd>
-  <dt><kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> <kbd>V</kbd></dt><dd>Swarm · wedge · ring · line formation</dd>
-  <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Morph: drone · striker · tank · harvester · artillery</dd>
-  <dt><kbd>Tab</kbd> <kbd>Space</kbd></dt><dd>Cycle groups · center camera (redeploy when wiped out)</dd>
-  <dt><kbd>Esc</kbd></dt><dd>Menu (the match keeps running)</dd>
-</dl>`;
+  <dt>Drag</dt><dd>Pan</dd>
+  <dt>Click</dt><dd>Move · click a rock to harvest it · click an enemy to attack</dd>
+  <dt>Right-click your swarm</dt><dd>Split, replicate, morph, research, build…</dd>
+  <dt>Enter</dt><dd>Command your swarm in plain words</dd>
+  <dt>Scroll</dt><dd>Zoom</dd>
+  <dt>Shift + drag</dt><dd>Select several swarms</dd>
+</dl>
+<p class="keys">Shortcuts: S split · G merge · B replicate · T research · Y research tree · 1–5 morph · Q E R abilities · Esc menu</p>`;
 
-const BUILD = 'BUILD 0.9 · ENDLESS ARENA';
-
-const INTERCEPTS = [
-  { order: 'split into three and harvest the closest rocks', code: ['for (const g of state.groups)', '  api.split(g, rock.x - g.x, rock.y - g.y);', '  api.harvest(half, nearest(half, state.rocks));'] },
-  { order: 'strikers flank ember from the north, rest hold the line', code: ["api.morph(flank, 'striker');", 'api.path(flank, [[x, y - 600], [ember.x, ember.y]]);', "api.formation(rest, 'line');"] },
-  { order: 'build a siege tank and push verdant', code: ["api.build(biggest, 'Siege Tank');", 'api.attack(tank, nearest(tank, verdant));', 'if (tank.ready.shield) api.shield(tank);'] },
-];
 
 function screen(cls: string, html: string): HTMLDivElement {
   const el = document.createElement('div');
@@ -77,39 +66,6 @@ function stopDemo(): void {
   demoRoot.remove();
 }
 
-let interceptTimer = 0;
-
-/** Types example orders and the code they turn into, so the menu shows what the prompt does. */
-function runIntercepts(host: HTMLElement): void {
-  const orderEl = host.querySelector('.ic-order')!;
-  const codeEl = host.querySelector('.ic-code')!;
-  let i = 0;
-  const play = () => {
-    const ic = INTERCEPTS[i++ % INTERCEPTS.length];
-    orderEl.textContent = '';
-    codeEl.innerHTML = '';
-    let c = 0;
-    const type = () => {
-      if (!host.isConnected) return;
-      if (c <= ic.order.length) {
-        orderEl.textContent = ic.order.slice(0, c++);
-        interceptTimer = window.setTimeout(type, 28 + Math.random() * 40);
-        return;
-      }
-      ic.code.forEach((line, k) => {
-        interceptTimer = window.setTimeout(() => {
-          const d = document.createElement('div');
-          d.textContent = line;
-          codeEl.append(d);
-        }, 350 + k * 260);
-      });
-      interceptTimer = window.setTimeout(play, 4200);
-    };
-    type();
-  };
-  play();
-}
-
 function menu(notice = ''): void {
   closeScreens();
   game?.destroy();
@@ -119,60 +75,33 @@ function menu(notice = ''): void {
   startDemo();
   const el = screen('menu', `
     <div class="shell">
-      <header class="brand">
-        <div class="kicker">One endless arena</div>
-        <h1 class="logo">SWARMER</h1>
-        <div class="rule"><i></i></div>
-      </header>
-      <section class="panel setup callsign" aria-label="Callsign">
-        <div class="opt"><label for="cs">Callsign</label><input id="cs" maxlength="16" spellcheck="false" placeholder="Pilot name" value="${esc(callsign)}"></div>
-      </section>
-      <nav class="menu-list" aria-label="Main menu">
-        <button class="mi mi-primary" data-act="play">Enter the arena<small class="online">Drop in, fight, leave whenever</small></button>
-        <button class="mi" data-act="briefing">Briefing<small>How the swarm thinks</small></button>
-        <button class="mi" data-act="controls">Controls<small>Mouse and hotkeys</small></button>
-        <button class="mi" data-act="sound">Sound<small class="snd"></small></button>
+      <div class="brand">Swarmer</div>
+      <nav class="menu-list" aria-label="Game modes">
+        <button class="mi" data-act="play">Arena<small class="online">Free-for-all, never ends</small></button>
+        <button class="mi" data-act="controls">How to play<small>Six controls, that's it</small></button>
       </nav>
+      <label class="callsign"><span>Name</span><input id="cs" maxlength="16" spellcheck="false" placeholder="Pilot" value="${esc(callsign)}"></label>
       ${notice ? `<p class="notice">${esc(notice)}</p>` : ''}
-      <p class="desktop-note">Built for mouse and keyboard. Open it on a desktop for the full game.</p>
+      <p class="desktop-note">Made for mouse and keyboard.</p>
     </div>
-    <aside class="panel side" data-panel="intercept">
-      <div class="panel-h">Comms <span class="live">Live</span></div>
-      <div class="ic-line"><span class="ic-pr">ORDER&gt;</span> <span class="ic-order"></span><span class="caret"></span></div>
-      <div class="ic-code"></div>
-      <p class="ic-note">Type orders in plain language. Your swarm writes its own program and runs it, live, against everyone else in the arena.</p>
-    </aside>
-    <aside class="panel side" data-panel="briefing" hidden>
-      <div class="panel-h">Briefing</div>
-      <ol class="brief">
-        <li><b>One arena.</b> Everyone plays on the same endless map. It never resets: drop in, fight, leave whenever. Bots keep it busy when it's quiet.</li>
-        <li><b>Move.</b> Click anywhere to send your swarm, click an asteroid to mine it into new units. Asteroids grow back.</li>
-        <li><b>Right-click your swarm</b> for every order: replicate, research, split, morph, formation, abilities and fabrication.</li>
-        <li><b>Talk.</b> Press <kbd>Enter</kbd> and give an order in plain language. The swarm writes a program for it; <em>Show code</em> reveals what it wrote.</li>
-        <li><b>Research</b> unlocks particle types for constructs: armor plates, spikes, thrusters, cannons, menders and more. Morphing into strikers, tanks, harvesters or artillery is always available.</li>
-        <li><b>Fabricate.</b> Describe a construct like a tank. It is built from your own units and crumbles as it takes hits.</li>
-        <li><b>Wiped out?</b> Redeploy with a fresh swarm somewhere quiet. Climb the leaderboard by staying big.</li>
-      </ol>
-    </aside>
-    <aside class="panel side" data-panel="controls" hidden>
-      <div class="panel-h">Controls</div>
+    <aside class="side" data-panel="controls" hidden>
+      <p class="lead">Grow your swarm by harvesting rocks, then swallow everyone else. Everybody plays on the same map, and it never resets.</p>
       ${CONTROLS}
     </aside>
-    <footer class="foot"><span>${BUILD}</span><span>AI by Cloudflare Workers AI</span></footer>`);
+    <button type="button" class="corner snd" aria-label="Toggle sound"></button>`);
   const cs = el.querySelector<HTMLInputElement>('#cs')!;
   cs.addEventListener('input', () => {
     callsign = cs.value.trim();
     try { localStorage.setItem('swarmer.name', callsign); } catch { /* ignore */ }
   });
   cs.addEventListener('keydown', (e) => { if (e.key === 'Enter') enter(); });
-  const snd = el.querySelector('.snd')!;
-  const showSound = () => (snd.textContent = audio.muted ? 'Off' : 'On');
+  const snd = el.querySelector<HTMLButtonElement>('.snd')!;
+  const showSound = () => (snd.textContent = audio.muted ? 'Sound off' : 'Sound on');
   showSound();
+  snd.addEventListener('click', () => { audio.unlock(); audio.setMuted(!audio.muted); showSound(); });
   void arenaStatus().then((st) => {
     if (!st || !el.isConnected) return;
-    el.querySelector('.online')!.textContent = st.players
-      ? `${st.players} pilot${st.players === 1 ? '' : 's'} in now: ${st.names.slice(0, 4).map(esc).join(', ')}${st.players > 4 ? '…' : ''}`
-      : 'Nobody in right now: the bots are waiting';
+    el.querySelector('.online')!.textContent = `${st.players} player${st.players === 1 ? '' : 's'}`;
   });
   const show = (name: string) => {
     el.querySelectorAll<HTMLElement>('.side').forEach((p) => (p.hidden = p.dataset.panel !== name));
@@ -184,25 +113,20 @@ function menu(notice = ''): void {
       audio.ui('click');
       const act = b.dataset.act!;
       if (act === 'play') enter();
-      else if (act === 'sound') {
-        audio.setMuted(!audio.muted);
-        showSound();
-      } else show(el.querySelector<HTMLElement>(`[data-panel="${act}"]`)!.hidden ? act : 'intercept');
+      else show(el.querySelector<HTMLElement>(`[data-panel="${act}"]`)!.hidden ? act : '');
     }));
-  runIntercepts(el.querySelector('[data-panel="intercept"]')!);
 }
 
 /** Connect to the arena; the game starts as soon as the world (fresh, saved, or another pilot's) arrives. */
 function enter(): void {
   audio.unlock();
-  clearTimeout(interceptTimer);
   conn?.close();
   const c = (conn = new Connection(callsign));
   closeScreens();
   screen('menu connecting', `
     <div class="shell">
-      <header class="brand"><div class="kicker">Arena</div><h1 class="logo">LINKING</h1><div class="rule"><i></i></div></header>
-      <p class="verdict">Syncing with the arena…</p>
+      <div class="brand">Swarmer</div>
+      <p class="verdict">Joining the arena…</p>
       <nav class="menu-list"><button class="mi cancel">Cancel</button></nav>
     </div>`).querySelector('.cancel')!.addEventListener('click', () => menu());
   c.onWelcome = (w: Welcome, link: NetLink) => start(w, link);
@@ -235,8 +159,8 @@ function start(wel: Welcome, link: NetLink): void {
     }, audio, link);
   } catch (err) {
     link.close();
-    screen('menu', `<div class="shell"><header class="brand"><div class="kicker">Display error</div><h1 class="logo">NO SIGNAL</h1><div class="rule"><i></i></div></header>
-      <section class="panel setup"><p>${esc((err as Error).message)}</p><p>Swarmer needs WebGL2: any recent Chrome, Edge, Firefox or Safari.</p></section></div>`);
+    screen('menu', `<div class="shell"><div class="brand">Swarmer</div>
+      <p class="notice">${esc((err as Error).message)}. Swarmer needs WebGL2: any recent Chrome, Edge, Firefox or Safari.</p></div>`);
     return;
   }
   game.onPause = (p) => (p ? pauseScreen() : closeScreens());
@@ -246,13 +170,13 @@ function pauseScreen(): void {
   closeScreens();
   const el = screen('pause', `
     <div class="shell">
-      <header class="brand"><div class="kicker">The arena keeps running</div><h1 class="logo">MENU</h1><div class="rule"><i></i></div></header>
+      <div class="brand">Swarmer</div>
       <nav class="menu-list">
-        <button class="mi mi-primary resume">Resume<small>Back to the arena</small></button>
-        <button class="mi quit">Leave arena<small>Your swarm fights on as a bot</small></button>
+        <button class="mi resume">Resume<small>The arena keeps running</small></button>
+        <button class="mi quit">Leave<small>Your swarm fights on without you</small></button>
       </nav>
     </div>
-    <aside class="panel side"><div class="panel-h">Controls</div>${CONTROLS}</aside>`);
+    <aside class="side">${CONTROLS}</aside>`);
   el.querySelector('.resume')!.addEventListener('click', () => game?.setPaused(false));
   el.querySelector('.quit')!.addEventListener('click', () => menu());
 }

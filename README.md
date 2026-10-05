@@ -31,18 +31,16 @@ Requires a browser with WebGL2 (any recent Chrome, Edge, Firefox or Safari). Des
 
 | Input | Action |
 |---|---|
-| LMB click | Move / attack / harvest with the selection (or with every swarm if nothing is selected); click your own swarm to select it |
-| LMB drag | Box select (Shift adds, double-click = all on screen) |
-| RMB on your swarm | Order menu: replicate, research, split, merge, hold, morph, formation, abilities, fabricate, research tree |
-| RMB elsewhere | Move, attack enemy, harvest rock; drag to draw a route, Shift queues waypoints |
-| Wheel, MMB drag, arrows, screen edge | Zoom to cursor, pan |
-| `S` / `G` / `H` | Split toward cursor / merge / hold |
-| `B` / `T` / `Y` | Replicate (20+ units) / research / research panel |
-| `Q` / `E` / `R` | Dash toward cursor / shield / nova |
-| `Z` `X` `C` `V` | Swarm / Wedge / Ring / Line formation |
-| `1`–`5` | Morph: Drone, Striker, Tank, Harvester, Artillery (always available) |
-| `Tab` / `Space` / `` ` `` | Cycle groups / center camera / select all |
-| `Esc` | Menu (the arena keeps running) · `Space` redeploys after a wipe |
+| Drag | Pan the map |
+| Click | Move (your selection, or all your swarms) · click a rock to harvest · click an enemy to attack · click your swarm to select it |
+| Right-click your swarm | Orders: replicate, research, split, hold, morph; *More* has formations, abilities and building |
+| Enter | Command your swarm in plain words |
+| Scroll | Zoom |
+| Shift + drag | Select several swarms |
+| Right-drag | Draw a route (Shift queues waypoints) |
+| `S` `G` `B` `T` `Y` `1`–`5` `Q` `E` `R` `Esc` | Shortcuts: split, merge, replicate, research, research tree, morph, abilities, menu |
+
+The interface follows nohope.io: black screen, plain white type, a dismissible controls card, and nothing else until you reach for it.
 
 ## How multiplayer works
 

@@ -56,7 +56,7 @@ export class Game {
   paused = false;
   private destroyed = false;
   private mouse = { x: 0, y: 0, wx: 0, wy: 0, in: false };
-  private drag: { x: number; y: number; button: number; cx: number; cy: number; moved: boolean } | null = null;
+  private drag: { x: number; y: number; button: number; cx: number; cy: number; moved: boolean; box: boolean } | null = null;
   private keys = new Set<string>();
   private hoverGroup = -1;
   private hoverRock = -1;
@@ -270,29 +270,12 @@ export class Game {
         continue;
       }
       if (e.t === 'teamOut' && e.team === this.me && e.n !== -1) {
-        this.hud?.banner('Your swarm was wiped out', '#ff6b5a');
         this.selected.clear();
         continue;
       }
-      if (e.t === 'teamOut' && e.n === -1) {
-        const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
-        if (e.team !== this.me) this.hud?.banner(`An AI took over ${this.teamName(e.team!).replace(' (AI)', '')}'s swarm`, `rgb(${c})`);
-      } else if (e.t === 'teamOut' && e.team !== this.me) {
-        const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
-        this.hud?.banner(`${this.teamName(e.team!)} has been eliminated`, `rgb(${c})`);
-        this.fx.shake(0.3);
-      } else if (e.t === 'groupLost') {
-        if (e.team === this.me) this.hud?.banner(`Swarm of ${e.n} lost`, '#ff6b5a');
-        else if (this.onScreen(e.x, e.y) && (e.n ?? 0) >= 40) {
-          const c = TEAM_COLORS[e.team!].map((v) => Math.round(v * 255)).join(',');
-          this.hud?.banner(`${this.teamName(e.team!)} swarm of ${e.n} destroyed`, `rgb(${c})`);
-        }
-      }
-      if (e.t === 'wave') {
-        const dir = this.compass(e.x, e.y);
-        this.hud?.banner(`Raider fleet inbound from the ${dir} — ${e.n} ships`, '#ffb357');
-        this.alerts.push({ x: e.x, y: e.y, t: 8, color: '#ffb357', label: 'Raiders' });
-      }
+      // Keep chatter low: only your own big losses and incoming raids get a line of text.
+      if (e.t === 'groupLost' && e.team === this.me && (e.n ?? 0) >= 40) this.hud?.banner(`Lost a swarm of ${e.n}`, '#ff8f7a');
+      if (e.t === 'wave') this.hud?.banner(`Raiders incoming from the ${this.compass(e.x, e.y)}`, '#ffd59a');
     }
     // Alert when an off-screen player group is in a fight.
     for (const g of this.world.groupsOf(this.me)) {
@@ -373,14 +356,6 @@ export class Game {
     if (this.keys.has('arrowright')) c.tx += pan;
     if (this.keys.has('arrowup')) c.ty -= pan;
     if (this.keys.has('arrowdown')) c.ty += pan;
-    // Edge panning.
-    if (this.mouse.in && !this.drag && document.pointerLockElement == null) {
-      const m = 6;
-      if (this.mouse.x < m) c.tx -= pan;
-      if (this.mouse.x > this.cssW - m) c.tx += pan;
-      if (this.mouse.y < m) c.ty -= pan;
-      if (this.mouse.y > this.cssH - m) c.ty += pan;
-    }
     const S = this.world.size;
     c.tx = Math.max(-200, Math.min(S + 200, c.tx));
     c.ty = Math.max(-200, Math.min(S + 200, c.ty));
@@ -461,7 +436,7 @@ export class Game {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, this.cssW, this.cssH);
     const w = this.world;
-    ctx.font = '600 11px "Saira Condensed", "Arial Narrow", sans-serif';
+    ctx.font = '500 11px Inter, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
@@ -511,7 +486,7 @@ export class Game {
       ctx.shadowBlur = 6;
       ctx.fillStyle = css;
       ctx.globalAlpha = 0.85;
-      ctx.fillText(label.toUpperCase(), x, y + 0.5);
+      ctx.fillText(label, x, y + 0.5);
       ctx.globalAlpha = 1;
       ctx.shadowBlur = 0;
     }
@@ -537,13 +512,8 @@ export class Game {
       const r = w.rocks[this.hoverRock];
       if (r?.alive) {
         const [x, y] = this.worldToScreen(r.x, r.y - r.r - 16);
-        ctx.fillStyle = 'rgba(6,8,11,0.82)';
-        const txt = `${r.wreck ? 'Wreck' : 'Asteroid'} · ${Math.round(r.mass / 3)} units of mass`;
-        const tw = ctx.measureText(txt).width + 14;
-        roundRect(ctx, x - tw / 2, y - 9, tw, 18, 2);
-        ctx.fill();
-        ctx.fillStyle = '#d9cbb5';
-        ctx.fillText(txt, x, y + 0.5);
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fillText(`${Math.round(r.mass / 3)} units inside`, x, y + 0.5);
       }
     }
 
@@ -551,7 +521,7 @@ export class Game {
     for (const t of this.fx.texts) {
       const [x, y] = this.worldToScreen(t.x, t.y);
       ctx.globalAlpha = Math.min(1, (1 - t.t / t.dur) * 2);
-      ctx.font = `700 ${t.size}px "Saira Condensed", "Arial Narrow", sans-serif`;
+      ctx.font = `500 ${t.size - 2}px Inter, system-ui, sans-serif`;
       ctx.fillStyle = t.color;
       ctx.fillText(t.text, x, y);
     }
@@ -601,14 +571,14 @@ export class Game {
       if (a.label) {
         ctx.globalAlpha = Math.min(1, a.t);
         ctx.fillStyle = a.color;
-        ctx.font = '700 10px "Saira Condensed", "Arial Narrow", sans-serif';
+        ctx.font = '500 10px Inter, system-ui, sans-serif';
         ctx.fillText(a.label, tx - Math.cos(ang) * 26, ty - Math.sin(ang) * 22);
         ctx.globalAlpha = 1;
       }
     }
 
     // Drag box.
-    if (this.drag && this.drag.button === 0 && this.drag.moved) {
+    if (this.drag && this.drag.button === 0 && this.drag.box && this.drag.moved) {
       const x = Math.min(this.drag.x, this.mouse.x), y = Math.min(this.drag.y, this.mouse.y);
       const bw = Math.abs(this.mouse.x - this.drag.x), bh = Math.abs(this.mouse.y - this.drag.y);
       ctx.fillStyle = 'rgba(90,210,255,0.08)';
@@ -623,7 +593,7 @@ export class Game {
       ? [this.targeting === 'split' ? 'Split: click where the new swarm goes' : 'Dash: click a target', '#9fe0ff'] as [string, string]
       : this.cursorHint();
     if (hint && this.mouse.in && !this.drag) {
-      ctx.font = '600 11px "Saira Condensed", "Arial Narrow", sans-serif';
+      ctx.font = '500 11px Inter, system-ui, sans-serif';
       ctx.textAlign = 'left';
       ctx.fillStyle = hint[1];
       ctx.fillText(hint[0], this.mouse.x + 16, this.mouse.y + 18);
@@ -651,19 +621,18 @@ export class Game {
 
   private cursorHint(): [string, string] | null {
     if (!this.selected.size) return null;
-    if (this.hoverShip >= 0) return ['Attack', '#ff8f7a'];
+    if (this.hoverShip >= 0) return ['Attack', 'rgba(255,255,255,0.8)'];
     if (this.hoverGroup >= 0) {
       const g = this.world.groups[this.hoverGroup];
       if (g && g.team !== this.me) {
         const m = this.matchup(g.role);
-        if (m > 1.25) return [`Attack · ${ROLES[g.role].name} · favored`, '#8dffa8'];
-        if (m < 0.8) return [`Attack · ${ROLES[g.role].name} · countered`, '#ff8f7a'];
-        return [`Attack · ${ROLES[g.role].name} · even`, '#ffd48f'];
+        if (m > 1.25) return ['Attack · you have the edge', 'rgba(157,255,180,0.9)'];
+        if (m < 0.8) return ['Attack · they counter you', 'rgba(255,143,122,0.9)'];
+        return ['Attack', 'rgba(255,255,255,0.8)'];
       }
-      if (g && !this.selected.has(g.id)) return ['Right-click for orders', '#9fe0ff'];
       return null;
     }
-    if (this.hoverRock >= 0) return ['Harvest', '#e8c98f'];
+    if (this.hoverRock >= 0) return ['Harvest', 'rgba(255,255,255,0.8)'];
     return null;
   }
 
@@ -688,7 +657,8 @@ export class Game {
         return;
       }
       canvas.setPointerCapture(e.pointerId);
-      this.drag = { x: e.offsetX, y: e.offsetY, button: e.button, cx: this.cam.tx, cy: this.cam.ty, moved: false };
+      // Like nohope: dragging pans the map; Shift+drag draws a selection box.
+      this.drag = { x: e.offsetX, y: e.offsetY, button: e.button, cx: this.cam.tx, cy: this.cam.ty, moved: false, box: e.button === 0 && e.shiftKey };
       if (e.button === 2) this.drawn = [e.offsetX, e.offsetY];
     });
     on(canvas, 'pointermove', (e: PointerEvent) => {
@@ -702,7 +672,7 @@ export class Game {
           const n = this.drawn.length;
           if (Math.hypot(e.offsetX - this.drawn[n - 2], e.offsetY - this.drawn[n - 1]) > 16) this.drawn.push(e.offsetX, e.offsetY);
         }
-        if (this.drag.button === 1) {
+        if (this.drag.button === 1 || (this.drag.button === 0 && !this.drag.box && this.drag.moved)) {
           this.cam.tx = this.drag.cx - (e.offsetX - this.drag.x) / this.cam.zoom;
           this.cam.ty = this.drag.cy - (e.offsetY - this.drag.y) / this.cam.zoom;
           this.cam.x = this.cam.tx;
@@ -726,7 +696,7 @@ export class Game {
         return;
       }
       if (d.button !== 0) return;
-      if (d.moved) this.boxSelect(d.x, d.y, e.offsetX, e.offsetY, e.shiftKey);
+      if (d.moved) { if (d.box) this.boxSelect(d.x, d.y, e.offsetX, e.offsetY, false); }
       else this.clickSelect(e.shiftKey);
     });
     on(canvas, 'pointerleave', () => { this.mouse.in = false; });
@@ -1063,15 +1033,6 @@ function orderLabel(t: string, harvesting: boolean): string {
   }
 }
 
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
 
 function pairs(flat: number[]): number[][] {
   const out: number[][] = [];

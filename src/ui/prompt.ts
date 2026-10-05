@@ -42,9 +42,8 @@ export class PromptDock {
       </div>
       <div class="dock-status" data-s="idle"></div>
       <form class="dock-form" autocomplete="off">
-        <span class="dock-pr">ORDER&gt;</span>
-        <input id="swarm-prompt" maxlength="500" spellcheck="false" aria-label="Order for your swarm">
-        <button type="submit" class="dock-go">Transmit <kbd>Enter</kbd></button>
+        <input id="swarm-prompt" maxlength="500" spellcheck="false" aria-label="Command your swarm">
+        <button type="submit" class="dock-go" aria-label="Send">↵</button>
       </form>
       <div class="dock-examples"></div>
       <div class="dock-designs" hidden></div>
@@ -90,8 +89,8 @@ export class PromptDock {
         e.preventDefault();
       }
     });
-    this.input.addEventListener('focus', () => this.el.classList.add('focus'));
-    this.input.addEventListener('blur', () => this.el.classList.remove('focus'));
+    this.input.addEventListener('focus', () => { this.el.classList.add('focus'); this.input.placeholder = this.placeholder(); });
+    this.input.addEventListener('blur', () => { this.el.classList.remove('focus'); this.input.placeholder = this.placeholder(); });
 
     this.sandbox = new SwarmSandbox({
       onCommands: (cmds) => {
@@ -120,14 +119,15 @@ export class PromptDock {
     this.designsEl.hidden = m !== 'design';
     this.placeholderIdx = 0;
     this.input.placeholder = this.placeholder();
-    this.el.querySelector('.dock-go')!.innerHTML = `${m === 'command' ? 'Transmit' : 'Fabricate'} <kbd>Enter</kbd>`;
-    this.el.querySelector('.dock-pr')!.textContent = m === 'command' ? 'ORDER>' : 'BUILD>';
+    this.el.classList.toggle('design', m === 'design');
     if (m === 'design') this.refreshDesigns();
     if (this.status === 'idle') this.renderStatus();
     this.input.focus();
   }
 
   private placeholder(): string {
+    // Calm by default; example phrasings only once you're typing in the box.
+    if (!this.focused) return this.mode === 'command' ? 'Command your swarm…' : 'Describe a construct…';
     return this.mode === 'command'
       ? PLACEHOLDERS[this.placeholderIdx % PLACEHOLDERS.length].toLowerCase()
       : DESIGN_PLACEHOLDERS[this.placeholderIdx % DESIGN_PLACEHOLDERS.length].toLowerCase();
@@ -222,7 +222,7 @@ export class PromptDock {
       const secs = Math.floor((performance.now() - this.thinkingSince) / 1000);
       if (secs !== this.thinkingShown) { this.thinkingShown = secs; this.renderStatus(); }
     }
-    if (this.focused || this.input.value) return;
+    if (!this.focused || this.input.value) return;
     this.placeholderTimer += dt;
     if (this.placeholderTimer > 6) {
       this.placeholderTimer = 0;
@@ -369,8 +369,8 @@ export class PromptDock {
     const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
     let html = '';
     if (s === 'idle') html = this.mode === 'command'
-      ? '<span class="dot"></span>Standing by. Type an order; the swarm writes its own program and runs it.'
-      : '<span class="dot"></span>Describe a construct. It is laid out from the parts you have researched (Y).';
+      ? 'Say what you want in plain words. Your swarm writes a program for it.'
+      : 'Describe a construct. It is built from the particles you have researched.';
     else if (s === 'thinking' && this.fixNote && this.attempt > 0) html = `<span class="dot"></span>${esc(this.fixNote)} <span class="secs">${Math.max(0, this.thinkingShown)}s</span>`;
     else if (s === 'thinking') html = (this.mode === 'command' ? `<span class="dot"></span>Writing a program for “${esc(this.label)}”…` : `<span class="dot"></span>Designing “${esc(this.label)}”…`) + ` <span class="secs">${Math.max(0, this.thinkingShown)}s</span>`;
     else if (s === 'designed') html = `<span class="dot"></span>${esc(this.errorMsg)}`;

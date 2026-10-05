@@ -18,6 +18,7 @@ export class Hud {
   private acc = 0;
   private knownUnlocks = 0;
   private respawnEl: HTMLDivElement;
+  private help: HTMLDivElement;
   private miniAcc = 0;
   readonly dock: PromptDock;
 
@@ -30,16 +31,27 @@ export class Hud {
     this.buildResearch();
     this.mini = document.createElement('canvas');
     this.mini.className = 'minimap';
-    this.mini.width = 180;
-    this.mini.height = 180;
+    this.mini.width = 150;
+    this.mini.height = 150;
     this.miniCtx = this.mini.getContext('2d')!;
     this.bindMinimap();
     this.banners = div('banners');
     this.respawnEl = div('respawn');
     this.respawnEl.hidden = true;
-    this.respawnEl.innerHTML = '<div class="rs-k">Signal lost</div><div class="rs-t">SWARM DESTROYED</div><p class="rs-s"></p><button type="button" class="rs-b">Redeploy <kbd>Space</kbd></button>';
+    this.respawnEl.innerHTML = '<div class="rs-t">Your swarm is gone</div><p class="rs-s"></p><button type="button" class="rs-b">Play again</button>';
     this.respawnEl.querySelector('button')!.addEventListener('click', () => this.game.respawn());
-    el.append(this.stats, this.teams, this.research, this.mini, this.banners, this.respawnEl);
+    // nohope-style controls card: shown until dismissed once.
+    this.help = div('help');
+    this.help.innerHTML = `<div class="help-h">Controls<button type="button" class="help-x" aria-label="Dismiss controls">×</button></div>
+      <ul><li>Drag to pan</li><li>Click to move</li><li>Click a rock to harvest it</li><li>Right-click your swarm for more</li><li>Press Enter to command your swarm</li><li>Scroll to zoom</li></ul>`;
+    let seen = false;
+    try { seen = localStorage.getItem('swarmer.help') === '1'; } catch { /* ignore */ }
+    this.help.hidden = seen;
+    this.help.querySelector('.help-x')!.addEventListener('click', () => {
+      this.help.hidden = true;
+      try { localStorage.setItem('swarmer.help', '1'); } catch { /* ignore */ }
+    });
+    el.append(this.stats, this.teams, this.research, this.mini, this.banners, this.respawnEl, this.help);
     this.dock = new PromptDock(el, game);
     this.update(1);
   }
@@ -67,18 +79,19 @@ export class Hud {
     }
     const node = (id: string, name: string, blurb: string, cost: number, tint: number[], req = '') =>
       `<button class="node" data-part="${id}" title="${req}${blurb}"><i style="background:rgb(${tint.map((v) => Math.round(v * 255)).join(',')})"></i><b>${name}</b><small>${blurb}</small><span class="cost">${cost} pt${cost > 1 ? 's' : ''}</span></button>`;
-    let html = '<div class="panel-title">Research <span class="pts"></span></div><div class="progress"><div></div></div>';
-    html += '<div class="tree-head">Particle types <small>parts for constructs: describe one in the Fabrication tab. Swarm morphs are always available.</small></div><div class="tree">';
+    let html = '<div class="panel-title">Research <span class="pts"></span><button type="button" class="help-x" aria-label="Close research">×</button></div><div class="progress"><div></div></div>';
+    html += '<div class="tree-head">Unlock particles to build constructs with. Right-click your swarm and choose Design new to describe one.</div><div class="tree">';
     tiers.forEach((tier, i) => {
-      html += `<div class="tier"><div class="tier-label">TIER ${i + 1}</div>`;
+      html += `<div class="tier"><div class="tier-label">Tier ${i + 1}</div>`;
       for (const p of tier) {
         const req = p.requires.length ? `Needs ${p.requires.map((r) => PART_BY_ID.get(r)!.name).join(' + ')}. ` : '';
         html += node(p.id, p.name, p.blurb, p.cost, p.tint, req);
       }
       html += '</div>';
     });
-    html += '</div><div class="hint">Earn points: right-click a swarm and pick <b>Research</b> (or press <kbd>T</kbd>). <kbd>Y</kbd> closes this panel.</div>';
+    html += '</div><div class="hint">Earn points: right-click your swarm and choose Research.</div>';
     this.research.innerHTML = html;
+    this.research.querySelector('.help-x')!.addEventListener('click', () => this.toggleResearch(false));
     this.research.querySelectorAll<HTMLButtonElement>('.node').forEach((b) =>
       b.addEventListener('click', () => {
         // Unlocks are orders too, so every client applies them on the same tick.
@@ -136,27 +149,24 @@ export class Hud {
     if (this.acc < 0.2) return;
     this.acc = 0;
     const w = this.game.world;
-    const me = w.teams[this.game.me] ?? { units: 0, points: 0 };
+    const me = w.teams[this.game.me];
     const link = this.game.link as { rtt?: number; networked: boolean };
-    const net = link.networked ? `<div class="st"><span>Ping</span><b>${Math.round(link.rtt ?? 0)}ms</b></div>` : '';
-    const next = Math.max(0, Math.ceil(w.nextWave - w.time));
-    const pilots = w.teams.filter((tm) => tm.owner >= 0).length;
-    this.stats.innerHTML = `<div class="st"><span>Units</span><b class="units">${me.units}</b></div>
-      <div class="st"><span>Kills</span><b>${'kills' in me ? me.kills : 0}</b></div>
-      <div class="st warn"><span>Next raid</span><b>${next}s</b></div>
-      <div class="st"><span>Research</span><b class="${me.points ? 'pts' : ''}">${me.points}</b></div>
-      <div class="st"><span>Pilots</span><b>${pilots}</b></div>${net}`;
-    // Leaderboard: biggest living swarms first.
-    let html = '<div class="lb-h">Arena</div>';
-    const total = w.teams.reduce((n, tm) => n + (tm.alive ? tm.units : 0), 0);
-    const ranked = w.teams.filter((tm) => tm.alive || tm.id === this.game.me).sort((a, b) => b.units - a.units);
-    for (const tm of ranked) {
+    const ranked = w.teams.filter((tm) => tm.alive).sort((a, b) => b.units - a.units);
+    const rank = ranked.findIndex((tm) => tm.id === this.game.me);
+    // One quiet readout: your size, your place, and research points only when there are some to spend.
+    let line = rank >= 0 ? `#${rank + 1} of ${ranked.length}` : '';
+    if (me?.points) line += `${line ? ' · ' : ''}<button type="button" class="pts">${me.points} research point${me.points === 1 ? '' : 's'}</button>`;
+    if (link.networked && (link.rtt ?? 0) > 180) line += `${line ? ' · ' : ''}<span class="lag">${Math.round(link.rtt!)} ms</span>`;
+    this.stats.innerHTML = `<div class="units">${me?.alive ? me.units : 0}</div><div class="line">${line}</div>`;
+    this.stats.querySelector('.pts')?.addEventListener('click', () => this.toggleResearch(true));
+    // Leaderboard: top five, plain text.
+    let html = '';
+    const top = ranked.slice(0, 5);
+    if (me?.alive && rank >= 5) top.push(me);
+    for (const tm of top) {
       const c = TEAM_COLORS[tm.id].map((v) => Math.round(v * 255)).join(',');
-      const share = tm.alive ? Math.min(100, (100 * tm.units) / Math.max(1, total)) : 0;
       const you = tm.id === this.game.me ? ' you' : '';
-      const bot = tm.owner < 0 ? ' <small>bot</small>' : '';
-      const name = esc(this.game.teamName(tm.id)) + (you ? ' <em>you</em>' : bot);
-      html += `<div class="team${you} ${tm.alive ? '' : 'dead'}" style="--c:rgb(${c})"><span>${name}</span><b>${tm.alive ? tm.units : 'Down'}</b><i style="width:${share}%"></i></div>`;
+      html += `<div class="team${you}" style="--c:rgb(${c})"><i></i><span>${esc(this.game.teamName(tm.id).replace(' (AI)', ''))}</span><b>${tm.units}</b></div>`;
     }
     // Wiped out: offer a fresh swarm.
     const mine = w.teams[this.game.me];
@@ -164,10 +174,10 @@ export class Hud {
     this.respawnEl.hidden = !down;
     if (down) {
       const wait = Math.max(0, Math.ceil(2 - (w.time - mine.deadAt)));
-      this.respawnEl.querySelector('.rs-s')!.textContent = `Peak ${mine.peak} units · ${mine.kills} kills. The arena fights on.`;
+      this.respawnEl.querySelector('.rs-s')!.textContent = `You peaked at ${mine.peak} units.`;
       const b = this.respawnEl.querySelector<HTMLButtonElement>('.rs-b')!;
       b.disabled = wait > 0;
-      b.innerHTML = wait > 0 ? `Redeploy in ${wait}s` : 'Redeploy <kbd>Space</kbd>';
+      b.textContent = wait > 0 ? `Play again in ${wait}s` : 'Play again';
     }
     this.teams.innerHTML = html;
     if (!this.research.classList.contains('hidden')) this.refreshResearch();

@@ -10,6 +10,7 @@ export class ContextMenu {
   private el: HTMLDivElement;
   private ids: number[] = [];
   private absorb: number[] = [];
+  static more = false; // remembered while the page is open
 
   constructor(host: HTMLElement, private game: Game) {
     this.el = document.createElement('div');
@@ -38,7 +39,15 @@ export class ContextMenu {
     this.absorb = absorb;
     this.render();
     this.el.hidden = false;
-    // Keep it on screen.
+    this.at = [x, y];
+    this.place();
+  }
+
+  private at: [number, number] = [0, 0];
+
+  /** Keep it on screen. */
+  private place(): void {
+    const [x, y] = this.at;
     const host = this.el.parentElement!.getBoundingClientRect();
     const r = this.el.getBoundingClientRect();
     const left = Math.min(x + 6, host.width - r.width - 8);
@@ -68,10 +77,10 @@ export class ContextMenu {
 
     const canRep = swarms.some((x) => x.count >= REPLICATE_MIN);
     html += '<div class="ctx-sec">Orders</div><div class="ctx-row">';
-    html += btn('replicate', 'Replicate', 'B', { off: !canRep, note: canRep ? 'grow in place' : `needs ${REPLICATE_MIN}+` });
+    html += btn('replicate', 'Replicate', 'B', { off: !canRep, note: canRep ? '' : `needs ${REPLICATE_MIN}+` });
     html += btn('research', 'Research', 'T', { off: !swarms.length, note: `${team.points} pt${team.points === 1 ? '' : 's'}` });
-    html += btn('split', 'Split', 'S', { off: !groups.some((x) => x.count >= 2), note: 'aim with a click' });
-    html += btn('merge', 'Merge', 'G', { off: groups.length < 2 });
+    html += btn('split', 'Split', 'S', { off: !groups.some((x) => x.count >= 2), note: '' });
+    if (groups.length > 1) html += btn('merge', 'Merge', 'G');
     html += btn('stop', 'Hold', 'H');
     html += '</div>';
 
@@ -117,10 +126,23 @@ export class ContextMenu {
     }
 
     html += `<div class="ctx-foot">${btn('tree', 'Research tree', 'Y', { note: `${team.points} pt${team.points === 1 ? '' : 's'} to spend` })}</div>`;
+    // Keep it short: everyday orders and morphs up front, the rest folded under "More".
+    let cut = html.indexOf('<div class="ctx-sec">Formation');
+    if (cut < 0) cut = html.indexOf('<div class="ctx-sec">Abilities');
+    if (cut >= 0) {
+      html = html.slice(0, cut) + `<button type="button" class="ctx-toggle" data-a="more">${ContextMenu.more ? 'Less' : 'More: formation, abilities, build'}</button>` +
+        `<div class="ctx-more"${ContextMenu.more ? '' : ' hidden'}>${html.slice(cut)}</div>`;
+    }
     this.el.innerHTML = html;
     this.el.querySelectorAll<HTMLButtonElement>('button[data-a]').forEach((b) =>
       b.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (b.dataset.a === 'more') {
+          ContextMenu.more = !ContextMenu.more;
+          this.render();
+          this.place();
+          return;
+        }
         this.run(b.dataset.a!);
       }));
   }

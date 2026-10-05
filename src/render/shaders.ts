@@ -33,13 +33,13 @@ void main(){
   vec2 far=(u_cam*0.15+vec2(px.x,-px.y)/max(u_zoom,0.08)*0.5)/700.0;
   float n=fbm(far*1.3+vec2(0.0,u_time*0.004));
   float n2=fbm(far*2.7-vec2(u_time*0.003,0.0)+n*1.5);
-  vec3 col=vec3(0.010,0.012,0.028);
-  col+=vec3(0.05,0.02,0.10)*smoothstep(0.35,0.85,n)*1.4;
-  col+=vec3(0.00,0.06,0.09)*smoothstep(0.45,0.9,n2)*1.3;
-  col+=vec3(0.09,0.03,0.05)*smoothstep(0.6,0.95,n*n2*1.6);
+  // Near-black like nohope: the swarms are the only thing that should glow.
+  vec3 col=vec3(0.003,0.003,0.006);
+  col+=vec3(0.03,0.015,0.05)*smoothstep(0.45,0.9,n)*0.6;
+  col+=vec3(0.00,0.025,0.04)*smoothstep(0.55,0.95,n2)*0.5;
   vec2 sp=(u_cam*0.3+vec2(px.x,-px.y)/max(u_zoom,0.1)*0.6);
-  col+=stars(sp/38.0,0.10,0.10)*0.6;
-  col+=stars((u_cam*0.6+vec2(px.x,-px.y)/max(u_zoom,0.1)*0.85)/70.0+31.0,0.06,0.07)*0.9;
+  col+=stars(sp/38.0,0.04,0.08)*0.3;
+  col+=stars((u_cam*0.6+vec2(px.x,-px.y)/max(u_zoom,0.1)*0.85)/70.0+31.0,0.025,0.06)*0.45;
   // Map boundary.
   vec2 e=min(world,vec2(u_size)-world);
   float edge=min(e.x,e.y);
